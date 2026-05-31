@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mc-pixelart": {
+      "command": "python",
+      "args": ["<项目路径>/mcp_server.py"],
+      "type": "stdio"
+    }
+  }
+}
