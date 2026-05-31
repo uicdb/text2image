@@ -65,6 +65,10 @@ def handle_tools_list(req_id: int | str, _params: dict) -> dict:
                         "type": "string",
                         "description": "Output filename (e.g. 'crystal_wand.png'), defaults to mc_pixelart_<name>_64x64.png",
                     },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Custom description of the item to generate. If omitted, defaults to the item name combined with Minecraft pixel art style prompts.",
+                    },
                 },
                 "required": ["name", "save_path"],
             },
@@ -81,6 +85,7 @@ def handle_tools_call(req_id: int | str, params: dict) -> dict:
     item_name = args.get("name", "")
     save_path = args.get("save_path", "")
     filename = args.get("filename")  # optional
+    prompt = args.get("prompt")  # optional custom prompt
 
     if not item_name:
         return _rpc_error(req_id, -32602, "Missing required parameter: 'name'")
@@ -89,7 +94,7 @@ def handle_tools_call(req_id: int | str, params: dict) -> dict:
 
     try:
         token, model = load_config()
-        out_path = generate_mc_pixelart(token, model, item_name, save_path, filename)
+        out_path = generate_mc_pixelart(token, model, item_name, save_path, filename, prompt)
         return _rpc_response(req_id, {
             "content": [{"type": "text", "text": f"Image saved to: {out_path}"}],
             "out_path": out_path,

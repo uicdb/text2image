@@ -186,15 +186,19 @@ def scale_pixel_art(img: Image.Image, size: tuple[int, int]) -> Image.Image:
 
 def generate_mc_pixelart(token: str, model: str, item: str,
                           save_path: str | None = None,
-                          filename: str | None = None) -> str:
+                          filename: str | None = None,
+                          prompt: str | None = None) -> str:
     """Generate a Minecraft pixel art image and save to disk.
 
     Returns the absolute path to the saved file.
     """
-    prompt = f"{item}, {POSITIVE_PROMPT}"
+    if prompt:
+        full_prompt = f"{prompt}, {POSITIVE_PROMPT}"
+    else:
+        full_prompt = f"{item}, {POSITIVE_PROMPT}"
     negative = NEGATIVE_PROMPT
 
-    img = generate_image(token, model, prompt, negative)
+    img = generate_image(token, model, full_prompt, negative)
     original_size = img.size
 
     img = remove_solid_background(img)
