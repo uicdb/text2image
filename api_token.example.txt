@@ -1,0 +1,10 @@
+# ── SiliconFlow API 配置文件 ──
+# 复制此文件为 api_token.txt 并填入你的信息
+#   cp api_token.example.txt api_token.txt
+#
+# apikey: SiliconFlow API 密钥，从 https://cloud.siliconflow.cn 获取
+# model:  可选，Kwai-Kolors/Kolors 或 Tongyi-MAI/Z-Image-Turbo
+#         不填默认使用 Kwai-Kolors/Kolors
+#
+apikey=sk-your-api-key-here
+model=Kwai-Kolors/Kolors
