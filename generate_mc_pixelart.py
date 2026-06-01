@@ -8,20 +8,50 @@ from PIL import Image
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "api_token.txt")
 API_URL = "https://api.siliconflow.cn/v1/images/generations"
-TARGET_SIZE = (64, 64)
+SIZE_OPTIONS = [16, 32, 64, 128, 256, 1024]
+BUFF_SIZE_OPTIONS = [18, 36, 72, 144, 288, 324]
+DEFAULT_SIZE = 64
+DEFAULT_BUFF_SIZE = 72
 AVAILABLE_MODELS = ["Kwai-Kolors/Kolors", "Tongyi-MAI/Z-Image-Turbo"]
 DEFAULT_MODEL = "Kwai-Kolors/Kolors"
 
-# ── Minecraft pixel art prompt (from tool/提示词.txt) ──
-POSITIVE_PROMPT = (
+# ── Item prompt (from tool/提示词.txt) ──
+ITEM_POSITIVE = (
     "game texture map, Minecraft style, pixel art item icon, "
     "32x32 pixels, pixel art style, flat colors, no gradient, no shadow, "
     "flat vector art, no shading, no gradient, "
     "isolated on transparent background, game asset"
 )
-NEGATIVE_PROMPT = (
+ITEM_NEGATIVE = (
     "photorealistic, 3D render, gradient, blurry, watermark, text, "
     "signature, character, background, shadow, depth"
+)
+
+# ── Block texture prompt ──
+BLOCK_POSITIVE = (
+    "Minecraft block texture, top-down view, tileable seamless pattern, "
+    "32x32 pixels, pixel art style, flat colors, no gradient, no shadow, "
+    "flat vector art, no shading, no perspective, no lighting, "
+    "game texture atlas, isolated on transparent background, game asset"
+)
+BLOCK_NEGATIVE = (
+    "photorealistic, 3D render, perspective, depth, gradient, blurry, "
+    "watermark, text, signature, character, background, shadow, lighting, "
+    "isometric, side view, angled view"
+)
+
+# ── Buff / status effect icon prompt ──
+BUFF_POSITIVE = (
+    "Minecraft status effect icon, buff potion effect symbol, "
+    "18x18 pixel art, small minimalist icon, simple clean silhouette, "
+    "flat colors, no gradient, no shadow, no detail, bold readable shape, "
+    "flat vector art, no shading, "
+    "isolated on transparent background, game UI asset"
+)
+BUFF_NEGATIVE = (
+    "photorealistic, 3D render, gradient, blurry, watermark, text, "
+    "signature, background, shadow, depth, complex, detailed, "
+    "character, scene, multiple objects"
 )
 
 
@@ -66,11 +96,13 @@ def load_config():
     return token, model
 
 
-def generate_image(token: str, model: str, prompt: str, negative_prompt: str = "") -> Image.Image:
+def generate_image(token: str, model: str, prompt: str,
+                    style_positive: str = ITEM_POSITIVE,
+                    style_negative: str = ITEM_NEGATIVE) -> Image.Image:
     payload = {
         "model": model,
-        "prompt": f"{prompt}, {POSITIVE_PROMPT}",
-        "negative_prompt": f"{negative_prompt}, {NEGATIVE_PROMPT}",
+        "prompt": f"{prompt}, {style_positive}",
+        "negative_prompt": style_negative,
         "image_size": "1024x1024",
         "batch_size": 1,
         "num_inference_steps": 20,
@@ -114,56 +146,60 @@ def generate_image(token: str, model: str, prompt: str, negative_prompt: str = "
 
 
 def remove_solid_background(img: Image.Image, tolerance: int = 40) -> Image.Image:
-    """Detect and remove a solid-color background by sampling image corners.
+    """Detect and remove a solid-color background by sampling all 4 edges.
 
-    Samples the four corners, computes the dominant background color, then
-    makes any pixel within *tolerance* Euclidean distance transparent.
-    Only triggers when corners are consistent (max corner variance < threshold).
+    Samples pixels along the top, bottom, left, and right edges to detect the
+    background color, then makes any similar pixel transparent.
+    Handles gradient backgrounds better than corner-only sampling.
     """
     w, h = img.size
     pixels = img.load()
+    edge_width = max(2, min(8, w // 8, h // 8))
 
-    # Sample corner regions (10x10 patches) to find background color
-    corner_size = min(10, w // 4, h // 4)
-    corners = [
-        (0, 0),                          # top-left
-        (w - corner_size, 0),            # top-right
-        (0, h - corner_size),            # bottom-left
-        (w - corner_size, h - corner_size),  # bottom-right
-    ]
+    # Collect edge pixels (skip the corners to avoid content that touches edges)
     samples = []
-    for cx, cy in corners:
-        for dx in range(corner_size):
-            for dy in range(corner_size):
-                r, g, b, a = pixels[cx + dx, cy + dy]
+    margin = edge_width * 2
+    # Top & bottom edges
+    for x in range(margin, w - margin):
+        for d in range(edge_width):
+            for pos in [(x, d), (x, h - 1 - d)]:
+                r, g, b, a = pixels[pos[0], pos[1]]
+                if a > 0:
+                    samples.append((r, g, b))
+    # Left & right edges
+    for y in range(margin, h - margin):
+        for d in range(edge_width):
+            for pos in [(d, y), (w - 1 - d, y)]:
+                r, g, b, a = pixels[pos[0], pos[1]]
                 if a > 0:
                     samples.append((r, g, b))
 
-    if len(samples) < corner_size * corner_size:  # too few opaque corner pixels
-        print("Background removal skipped (corners already transparent)")
+    if len(samples) < 50:
+        print("Background removal skipped (edges mostly transparent)")
         return img
 
-    # Average corner color
-    avg_r = sum(s[0] for s in samples) // len(samples)
-    avg_g = sum(s[1] for s in samples) // len(samples)
-    avg_b = sum(s[2] for s in samples) // len(samples)
-    bg_color = (avg_r, avg_g, avg_b)
+    # Find the most common color cluster (simple median approach)
+    samples.sort()
+    median = samples[len(samples) // 2]
+    bg_color = median
 
-    # Check corner consistency — if corners vary too much, skip
-    max_dist = max(
-        (s[0] - avg_r) ** 2 + (s[1] - avg_g) ** 2 + (s[2] - avg_b) ** 2
-        for s in samples
-    )
-    corner_variance = int(max_dist ** 0.5)
-    if corner_variance > 60:
-        print(f"Background removal skipped (corners inconsistent, variance={corner_variance})")
+    # Check if edges are consistent enough
+    distances = [(s[0] - bg_color[0]) ** 2 + (s[1] - bg_color[1]) ** 2 + (s[2] - bg_color[2]) ** 2
+                 for s in samples]
+    distances.sort()
+    p90_dist = int(distances[int(len(distances) * 0.9)] ** 0.5)
+
+    if p90_dist > 80:
+        print(f"Background removal skipped (edges too varied, p90_dist={p90_dist})")
         return img
 
-    print(f"Removing solid background color: RGB({bg_color[0]}, {bg_color[1]}, {bg_color[2]}) "
-          f"[tolerance={tolerance}, corner_variance={corner_variance}]")
+    # Use the 90th percentile + buffer as tolerance
+    effective_tol = max(tolerance, p90_dist + 15)
+    print(f"Removing background color ~RGB({bg_color[0]}, {bg_color[1]}, {bg_color[2]}) "
+          f"[tolerance={effective_tol}, p90={p90_dist}]")
 
-    tol_sq = tolerance * tolerance
-    transparent = 0
+    tol_sq = effective_tol * effective_tol
+    removed = 0
     for y in range(h):
         for x in range(w):
             r, g, b, a = pixels[x, y]
@@ -172,11 +208,15 @@ def remove_solid_background(img: Image.Image, tolerance: int = 40) -> Image.Imag
             dist = (r - bg_color[0]) ** 2 + (g - bg_color[1]) ** 2 + (b - bg_color[2]) ** 2
             if dist <= tol_sq:
                 pixels[x, y] = (r, g, b, 0)
-                transparent += 1
+                removed += 1
 
     total = w * h
-    print(f"Made {transparent}/{total} pixels transparent ({transparent * 100 // total}%)")
+    print(f"Made {removed}/{total} pixels transparent ({removed * 100 // total}%)")
     return img
+
+
+def _ensure_png_ext(filename: str) -> str:
+    return filename if filename.endswith(".png") else f"{filename}.png"
 
 
 def scale_pixel_art(img: Image.Image, size: tuple[int, int]) -> Image.Image:
@@ -187,37 +227,122 @@ def scale_pixel_art(img: Image.Image, size: tuple[int, int]) -> Image.Image:
 def generate_mc_pixelart(token: str, model: str, item: str,
                           save_path: str | None = None,
                           filename: str | None = None,
-                          prompt: str | None = None) -> str:
-    """Generate a Minecraft pixel art image and save to disk.
+                          prompt: str | None = None,
+                          size: int = DEFAULT_SIZE) -> str:
+    """Generate a Minecraft pixel art item icon and save to disk.
 
     Returns the absolute path to the saved file.
     """
     if prompt:
-        full_prompt = f"{prompt}, {POSITIVE_PROMPT}"
+        full_prompt = prompt
     else:
-        full_prompt = f"{item}, {POSITIVE_PROMPT}"
-    negative = NEGATIVE_PROMPT
+        full_prompt = item
 
-    img = generate_image(token, model, full_prompt, negative)
-    original_size = img.size
+    img = generate_image(token, model, full_prompt, ITEM_POSITIVE, ITEM_NEGATIVE)
 
     img = remove_solid_background(img)
-    scaled = scale_pixel_art(img, TARGET_SIZE)
+    scaled = scale_pixel_art(img, (size, size))
 
     out_dir = save_path if save_path else os.path.dirname(__file__)
     os.makedirs(out_dir, exist_ok=True)
-    out_name = filename if filename else f"mc_pixelart_{item.replace(' ', '_')}_{TARGET_SIZE[0]}x{TARGET_SIZE[1]}.png"
+    out_name = _ensure_png_ext(filename) if filename else f"mc_pixelart_{item.replace(' ', '_')}_{size}x{size}.png"
     out_path = os.path.join(out_dir, out_name)
 
     scaled.save(out_path, "PNG")
     return os.path.abspath(out_path)
 
 
+def generate_mc_block(token: str, model: str, name: str,
+                       save_path: str | None = None,
+                       filename: str | None = None,
+                       prompt: str | None = None,
+                       size: int = DEFAULT_SIZE) -> str:
+    """Generate a Minecraft block texture and save to disk.
+
+    Returns the absolute path to the saved file.
+    """
+    if prompt:
+        full_prompt = prompt
+    else:
+        full_prompt = name
+
+    img = generate_image(token, model, full_prompt, BLOCK_POSITIVE, BLOCK_NEGATIVE)
+
+    img = remove_solid_background(img)
+    scaled = scale_pixel_art(img, (size, size))
+
+    out_dir = save_path if save_path else os.path.dirname(__file__)
+    os.makedirs(out_dir, exist_ok=True)
+    out_name = _ensure_png_ext(filename) if filename else f"mc_block_{name.replace(' ', '_')}_{size}x{size}.png"
+    out_path = os.path.join(out_dir, out_name)
+
+    scaled.save(out_path, "PNG")
+    return os.path.abspath(out_path)
+
+
+def generate_mc_buff(token: str, model: str, name: str,
+                      save_path: str | None = None,
+                      filename: str | None = None,
+                      prompt: str | None = None,
+                      size: int = DEFAULT_BUFF_SIZE,
+                      keep_background: bool = False) -> str:
+    """Generate a Minecraft buff/status effect icon and save to disk.
+
+    Returns the absolute path to the saved file.
+    """
+    if prompt:
+        full_prompt = prompt
+    else:
+        full_prompt = name
+
+    img = generate_image(token, model, full_prompt, BUFF_POSITIVE, BUFF_NEGATIVE)
+
+    if not keep_background:
+        img = remove_solid_background(img)
+    scaled = scale_pixel_art(img, (size, size))
+
+    out_dir = save_path if save_path else os.path.dirname(__file__)
+    os.makedirs(out_dir, exist_ok=True)
+    out_name = _ensure_png_ext(filename) if filename else f"mc_buff_{name.replace(' ', '_')}_{size}x{size}.png"
+    out_path = os.path.join(out_dir, out_name)
+
+    scaled.save(out_path, "PNG")
+    return os.path.abspath(out_path)
+
+
+def rotate_pixel_art(input_path: str, save_path: str,
+                      filename: str | None = None,
+                      angle: float = 45.0) -> str:
+    """Rotate an image then scale back to original size using NEAREST.
+
+    Useful for fixing item orientation (e.g. making a horizontal sword diagonal).
+    Returns the absolute path to the saved file.
+    """
+    img = Image.open(input_path).convert("RGBA")
+    orig_size = img.size
+
+    # Rotate with expand so content is not cropped
+    rotated = img.rotate(angle, resample=Image.NEAREST, expand=True)
+
+    # Scale back to original dimensions, preserving pixel-art sharpness
+    result = rotated.resize(orig_size, Image.NEAREST)
+
+    out_dir = save_path
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(input_path))[0]
+    out_name = _ensure_png_ext(filename) if filename else f"{base}_rot{int(angle)}.png"
+    out_path = os.path.join(out_dir, out_name)
+
+    result.save(out_path, "PNG")
+    return os.path.abspath(out_path)
+
+
 def main():
     token, model = load_config()
 
-    # Parse CLI: [--model MODEL] [item_name]
+    # Parse CLI: [--block] [--model MODEL] [item_name]
     args = sys.argv[1:]
+    mode = "item"
     item = "crystal wand"
     i = 0
     while i < len(args):
@@ -227,12 +352,18 @@ def main():
                 print(f"[WARN] Unknown model '{model}', using {DEFAULT_MODEL}")
                 model = DEFAULT_MODEL
             i += 2
+        elif args[i] == "--block":
+            mode = "block"
+            i += 1
         else:
             item = args[i]
             i += 1
 
-    print(f"Model: {model}")
-    out_path = generate_mc_pixelart(token, model, item)
+    print(f"Mode: {mode}, Model: {model}")
+    if mode == "block":
+        out_path = generate_mc_block(token, model, item)
+    else:
+        out_path = generate_mc_pixelart(token, model, item)
     print(f"Saved: {out_path}")
 
 

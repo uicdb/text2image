@@ -1,6 +1,8 @@
 # MC Pixel Art Generator
 
-调用 AI 生成 Minecraft 风格像素物品图标，自动去背景，邻近缩放到 64×64。
+调用 AI 生成 Minecraft 风格像素贴图（物品、方块、Buff 图标），智能去背景，邻近缩放。
+
+支持 **CLI** 和 **MCP 服务** 两种使用方式。
 
 ## 环境要求
 
@@ -10,15 +12,14 @@
 ## 安装
 
 ```bash
-# 1. 克隆或下载本项目
-# 2. 安装依赖
 pip install -r requirements.txt
 ```
+
+依赖：`requests`（API 调用）、`Pillow`（图像处理）。
 
 ## 配置
 
 ```bash
-# 复制配置模板
 cp api_token.example.txt api_token.txt
 ```
 
@@ -32,30 +33,26 @@ model=Kwai-Kolors/Kolors
 | 字段 | 说明 |
 |------|------|
 | `apikey` | SiliconFlow API 密钥 |
-| `model` | 可选，默认 `Kwai-Kolors/Kolors`，也可选 `Tongyi-MAI/Z-Image-Turbo` |
+| `model` | 可选 `Kwai-Kolors/Kolors`（默认）或 `Tongyi-MAI/Z-Image-Turbo` |
 
 ## 命令行用法
 
 ```bash
-# 默认生成"水晶法杖"
-python generate_mc_pixelart.py
-
-# 指定物品
+# 物品图标（默认 64x64）
 python generate_mc_pixelart.py "diamond sword"
 
-# 切换模型
-python generate_mc_pixelart.py --model "Tongyi-MAI/Z-Image-Turbo" "iron pickaxe"
-```
+# 方块贴图
+python generate_mc_pixelart.py --block "stone bricks"
 
-输出文件：`mc_pixelart_<物品名>_64x64.png`
+# 切换模型
+python generate_mc_pixelart.py --model "Tongyi-MAI/Z-Image-Turbo" "crystal wand"
+```
 
 ## MCP 服务
 
-以 MCP 工具形式运行，供 Claude Code 等客户端调用。
+### 配置
 
-### 配置 MCP
-
-编辑 `~/.claude/settings.json`，在 `mcpServers` 中添加：
+编辑 `~/.claude/settings.json`，在 `mcpServers` 中添加（可参考 `mcp_config.json`）：
 
 ```json
 {
@@ -69,41 +66,94 @@ python generate_mc_pixelart.py --model "Tongyi-MAI/Z-Image-Turbo" "iron pickaxe"
 }
 ```
 
-也可参考项目中的 `mcp_config.json` 文件。
+重启 Claude Code 生效。
 
-### MCP 工具参数
+### MCP 工具
 
-`generate_mc_pixelart`
+#### generate_mc_pixelart — 物品图标
 
 | 参数 | 必填 | 说明 |
-|------|------|------|
-| `name` | 是 | 材质名，如 `"crystal wand"` |
-| `save_path` | 是 | 图片保存目录 |
-| `filename` | 否 | 自定义文件名，默认 `mc_pixelart_<name>_64x64.png` |
+|------|:--:|------|
+| `name` | 是 | 物品名称，如 `"diamond sword"` |
+| `save_path` | 是 | 保存目录 |
+| `filename` | 否 | 文件名，默认 `mc_pixelart_<name>_<size>x<size>.png` |
+| `prompt` | 否 | 自定义提示词，不填则自动拼接 |
+| `size` | 否 | 16/32/64/128/256/1024，默认 64 |
+
+> 朝向不对时用 `rotate_pixel_art` 修正，不要重新生成。
+
+#### generate_mc_block — 方块贴图
+
+| 参数 | 必填 | 说明 |
+|------|:--:|------|
+| `name` | 是 | 方块名称，如 `"grass block"` |
+| `save_path` | 是 | 保存目录 |
+| `filename` | 否 | 文件名，默认 `mc_block_<name>_<size>x<size>.png` |
+| `prompt` | 否 | 自定义提示词 |
+| `size` | 否 | 16/32/64/128/256/1024，默认 64 |
+
+> 朝向不对时用 `rotate_pixel_art` 修正，不要重新生成。
+
+#### generate_mc_buff — Buff 图标
+
+| 参数 | 必填 | 说明 |
+|------|:--:|------|
+| `name` | 是 | 效果名称，如 `"speed boost"` |
+| `save_path` | 是 | 保存目录 |
+| `filename` | 否 | 文件名，默认 `mc_buff_<name>_<size>x<size>.png` |
+| `prompt` | 否 | 自定义提示词 |
+| `size` | 否 | 18/36/72/144/288/324，默认 72 |
+| `keep_background` | 否 | 保留 AI 生成的背景，默认 `false`（去背景） |
+
+#### rotate_pixel_art — 旋转修正
+
+| 参数 | 必填 | 说明 |
+|------|:--:|------|
+| `input_path` | 是 | 原图绝对路径 |
+| `save_path` | 是 | 输出目录 |
+| `filename` | 否 | 文件名，默认 `<原名>_rot<角度>.png` |
+| `angle` | 否 | 旋转角度，正数逆时针，默认 45 |
+
+典型用法：生成后方向不对 → 旋转 90° 或 -90° 翻转方向，不重新生成。
 
 ### MCP 调用示例
 
-在 Claude Code 中直接对话：
+在 Claude Code 中对话即可：
 
-> 帮我生成一个钻石剑的 MC 像素图标，存到 `C:\textures` 下
+> 生成一把钻石剑的像素图标，128x128，存到 `C:\textures`
+
+> 生成一个速度 buff 图标，用 Tongyi 模型，保留背景
+
+> 把刚才的图片逆时针旋转 90 度
 
 ## 处理流程
 
 ```
-API 生成 1024×1024  →  智能去纯色背景  →  邻近缩放 64×64  →  保存 PNG
+API 生成 1024×1024  →  全边缘采样去背景  →  NEAREST 缩放到目标尺寸  →  保存 PNG
 ```
 
-- **去背景**：采样四角颜色，自动检测并移除纯色背景改为透明
-- **邻近缩放**：使用 `NEAREST` 插值，保持像素艺术锐利边缘
+- **去背景**：采样图片四条边缘的颜色，自动检测并移除背景改为透明。渐变背景也能处理。
+- **邻近缩放**：全部使用 `NEAREST` 插值，保持像素艺术锐利边缘。
+
+## 提示词体系
+
+项目内置三套提示词，分别对应不同生成类型：
+
+| 类型 | 正向强调 | 负向排除 |
+|------|----------|----------|
+| 物品 | 物品图标、无渐变无阴影、透明背景 | 3D、模糊、水印、阴影 |
+| 方块 | 俯视图、tileable 无缝、无透视 | 3D、透视、侧视图、光照 |
+| Buff | 小图标、极简轮廓、18x18 风格 | 复杂细节、场景、多物体 |
 
 ## 项目文件
 
 ```
 ├── generate_mc_pixelart.py   # 核心逻辑 + CLI 入口
-├── mcp_server.py             # MCP 服务
-├── api_token.txt             # 你的 API 配置（不入 git）
+├── mcp_server.py             # MCP 服务（4 个工具）
+├── api_token.txt             # API 配置（不入 git）
 ├── api_token.example.txt     # 配置模板
 ├── requirements.txt          # Python 依赖
 ├── mcp_config.json           # MCP 配置参考
+├── README.md
 └── tool/                     # API 格式与提示词参考
 ```

@@ -1,27 +1,153 @@
 """MCP server wrapping the Minecraft pixel art generator.
 
-Provides a single tool: generate_mc_pixelart
+Tools: generate_mc_pixelart, generate_mc_block, generate_mc_buff, rotate_pixel_art
 """
 
 import json
 import sys
 import os
 
-# Ensure project root is on the import path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generate_mc_pixelart import (  # noqa: E402
     load_config,
     generate_mc_pixelart,
-    AVAILABLE_MODELS,
-    DEFAULT_MODEL,
+    generate_mc_block,
+    generate_mc_buff,
+    rotate_pixel_art,
+    SIZE_OPTIONS,
+    BUFF_SIZE_OPTIONS,
+    DEFAULT_SIZE,
+    DEFAULT_BUFF_SIZE,
 )
 
-TOOL_NAME = "generate_mc_pixelart"
-TOOL_DESCRIPTION = (
-    "Generate a Minecraft-style pixel art item icon using AI, "
-    "remove solid-color background, and nearest-neighbor downscale to 64x64."
-)
+SIZE_DESC = f"Output size in pixels ({', '.join(str(s) for s in SIZE_OPTIONS)}). Default: "
+BUFF_SIZE_DESC = f"Output size in pixels ({', '.join(str(s) for s in BUFF_SIZE_OPTIONS)}). Default: "
+
+TOOLS = [
+    {
+        "name": "generate_mc_pixelart",
+        "description": "Generate a Minecraft-style pixel art item icon using AI, remove solid-color background, and nearest-neighbor downscale. IMPORTANT: if the generated image has wrong orientation or direction, DO NOT regenerate — use rotate_pixel_art to fix it instead.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Material/item name to generate, e.g. 'crystal wand', 'diamond sword'",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the generated PNG file",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to mc_pixelart_<name>_<size>x<size>.png",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Custom description of the item. If omitted, uses the name combined with Minecraft pixel art style prompts.",
+                },
+                "size": {
+                    "type": "integer",
+                    "description": SIZE_DESC + str(DEFAULT_SIZE) + ".",
+                },
+            },
+            "required": ["name", "save_path"],
+        },
+    },
+    {
+        "name": "generate_mc_block",
+        "description": "Generate a Minecraft-style block texture (top-down, tileable) using AI, remove solid-color background, and nearest-neighbor downscale. IMPORTANT: if the generated image has wrong orientation, DO NOT regenerate — use rotate_pixel_art to fix it instead.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Block name to generate, e.g. 'grass block', 'stone bricks', 'oak planks'",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the generated PNG file",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to mc_block_<name>_<size>x<size>.png",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Custom description of the block texture. If omitted, uses the name combined with block texture style prompts.",
+                },
+                "size": {
+                    "type": "integer",
+                    "description": SIZE_DESC + str(DEFAULT_SIZE) + ".",
+                },
+            },
+            "required": ["name", "save_path"],
+        },
+    },
+    {
+        "name": "generate_mc_buff",
+        "description": "Generate a Minecraft-style status effect / buff icon using AI, then nearest-neighbor downscale. IMPORTANT: if the generated icon has wrong orientation, DO NOT regenerate — use rotate_pixel_art to fix it instead.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Buff/effect name, e.g. 'speed boost', 'strength', 'fire resistance'",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the generated PNG file",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to mc_buff_<name>_<size>x<size>.png",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Custom description of the buff icon. If omitted, uses the name combined with buff icon style prompts.",
+                },
+                "size": {
+                    "type": "integer",
+                    "description": BUFF_SIZE_DESC + str(DEFAULT_BUFF_SIZE) + ".",
+                },
+                "keep_background": {
+                    "type": "boolean",
+                    "description": "Set to true to keep the AI-generated background. Default false (background removed).",
+                },
+            },
+            "required": ["name", "save_path"],
+        },
+    },
+    {
+        "name": "rotate_pixel_art",
+        "description": "Rotate an existing image then nearest-neighbor scale back to original size. This is the PREFERRED way to fix item orientation — use this instead of regenerating. For example: if a sword is horizontal but should be diagonal (bottom-left to top-right), rotate 45 degrees. If orientation is mirrored, rotate 90 degrees.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "input_path": {
+                    "type": "string",
+                    "description": "Absolute path to the image file to rotate",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the rotated image",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to <original>_rot<angle>.png",
+                },
+                "angle": {
+                    "type": "number",
+                    "description": "Rotation angle in degrees (default 45). Positive = counter-clockwise.",
+                },
+            },
+            "required": ["input_path", "save_path"],
+        },
+    },
+]
+
+TOOL_NAMES = {t["name"] for t in TOOLS}
 
 
 def _rpc_response(req_id, result):
@@ -37,64 +163,63 @@ def _send(msg: dict) -> None:
     sys.stdout.flush()
 
 
-def handle_initialize(req_id: int | str, _params: dict) -> dict:
+def handle_initialize(req_id, _params):
     return _rpc_response(req_id, {
         "protocolVersion": "2024-11-05",
         "capabilities": {"tools": {}},
-        "serverInfo": {"name": "mc-pixelart-generator", "version": "1.0.0"},
+        "serverInfo": {"name": "mc-pixelart-generator", "version": "1.1.0"},
     })
 
 
-def handle_tools_list(req_id: int | str, _params: dict) -> dict:
-    return _rpc_response(req_id, {
-        "tools": [{
-            "name": TOOL_NAME,
-            "description": TOOL_DESCRIPTION,
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Material/item name to generate, e.g. 'crystal wand', 'diamond sword'",
-                    },
-                    "save_path": {
-                        "type": "string",
-                        "description": "Directory path to save the generated PNG file",
-                    },
-                    "filename": {
-                        "type": "string",
-                        "description": "Output filename (e.g. 'crystal_wand.png'), defaults to mc_pixelart_<name>_64x64.png",
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "Custom description of the item to generate. If omitted, defaults to the item name combined with Minecraft pixel art style prompts.",
-                    },
-                },
-                "required": ["name", "save_path"],
-            },
-        }]
-    })
+def handle_tools_list(req_id, _params):
+    return _rpc_response(req_id, {"tools": TOOLS})
 
 
-def handle_tools_call(req_id: int | str, params: dict) -> dict:
+def handle_tools_call(req_id, params):
     tool_name = params.get("name", "")
-    if tool_name != TOOL_NAME:
+    if tool_name not in TOOL_NAMES:
         return _rpc_error(req_id, -32601, f"Unknown tool: {tool_name}")
 
     args = params.get("arguments", {})
-    item_name = args.get("name", "")
-    save_path = args.get("save_path", "")
-    filename = args.get("filename")  # optional
-    prompt = args.get("prompt")  # optional custom prompt
-
-    if not item_name:
-        return _rpc_error(req_id, -32602, "Missing required parameter: 'name'")
-    if not save_path:
-        return _rpc_error(req_id, -32602, "Missing required parameter: 'save_path'")
 
     try:
-        token, model = load_config()
-        out_path = generate_mc_pixelart(token, model, item_name, save_path, filename, prompt)
+        if tool_name == "rotate_pixel_art":
+            input_path = args.get("input_path", "")
+            save_path = args.get("save_path", "")
+            if not input_path:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'input_path'")
+            if not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'save_path'")
+            out_path = rotate_pixel_art(
+                input_path, save_path,
+                args.get("filename"),
+                float(args.get("angle", 45.0)),
+            )
+        else:
+            item_name = args.get("name", "")
+            save_path = args.get("save_path", "")
+            if not item_name:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'name'")
+            if not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'save_path'")
+
+            filename = args.get("filename")
+            prompt = args.get("prompt")
+            size = args.get("size")
+
+            token, model = load_config()
+
+            if tool_name == "generate_mc_block":
+                out_path = generate_mc_block(token, model, item_name, save_path, filename, prompt,
+                                              size if size else DEFAULT_SIZE)
+            elif tool_name == "generate_mc_buff":
+                out_path = generate_mc_buff(token, model, item_name, save_path, filename, prompt,
+                                             size if size else DEFAULT_BUFF_SIZE,
+                                             bool(args.get("keep_background", False)))
+            else:
+                out_path = generate_mc_pixelart(token, model, item_name, save_path, filename, prompt,
+                                                 size if size else DEFAULT_SIZE)
+
         return _rpc_response(req_id, {
             "content": [{"type": "text", "text": f"Image saved to: {out_path}"}],
             "out_path": out_path,
@@ -124,7 +249,6 @@ def run():
         method = msg.get("method", "")
         params = msg.get("params", {})
 
-        # Handle notifications (no id) — just acknowledge initialized
         if req_id is None:
             continue
 
