@@ -1,6 +1,6 @@
 """MCP server wrapping the Minecraft pixel art generator.
 
-Tools: generate_mc_pixelart, generate_mc_block, generate_mc_buff, rotate_pixel_art
+Tools: generate_mc_pixelart, generate_mc_block, generate_mc_buff, generate_image_raw, rotate_pixel_art
 """
 
 import json
@@ -14,6 +14,7 @@ from generate_mc_pixelart import (  # noqa: E402
     generate_mc_pixelart,
     generate_mc_block,
     generate_mc_buff,
+    generate_image_raw,
     rotate_pixel_art,
     SIZE_OPTIONS,
     BUFF_SIZE_OPTIONS,
@@ -120,6 +121,36 @@ TOOLS = [
         },
     },
     {
+        "name": "generate_image_raw",
+        "description": "Generate a raw AI image from a custom prompt. No Minecraft pixel-art style is applied — use this for general-purpose image generation (non-pixel art, photorealistic, illustrations, etc.).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Custom image generation prompt (required). Describe exactly what you want.",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the generated PNG file",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to image_raw.png",
+                },
+                "negative_prompt": {
+                    "type": "string",
+                    "description": "Negative prompt — what to avoid in the image.",
+                },
+                "image_size": {
+                    "type": "string",
+                    "description": "Image size in 'WxH' format. Auto-detected from model if not set.",
+                },
+            },
+            "required": ["prompt", "save_path"],
+        },
+    },
+    {
         "name": "rotate_pixel_art",
         "description": "Rotate an existing image then nearest-neighbor scale back to original size. This is the PREFERRED way to fix item orientation — use this instead of regenerating. For example: if a sword is horizontal but should be diagonal (bottom-left to top-right), rotate 45 degrees. If orientation is mirrored, rotate 90 degrees.",
         "inputSchema": {
@@ -195,6 +226,22 @@ def handle_tools_call(req_id, params):
                 args.get("filename"),
                 float(args.get("angle", 45.0)),
             )
+        elif tool_name == "generate_image_raw":
+            prompt = args.get("prompt", "")
+            save_path = args.get("save_path", "")
+            if not prompt:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'prompt'")
+            if not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'save_path'")
+            token, model, img_size = load_config()
+            image_size = args.get("image_size")
+            out_path = generate_image_raw(
+                token, model, prompt,
+                args.get("negative_prompt", ""),
+                save_path,
+                args.get("filename"),
+                image_size if image_size else img_size,
+            )
         else:
             item_name = args.get("name", "")
             save_path = args.get("save_path", "")
@@ -206,19 +253,22 @@ def handle_tools_call(req_id, params):
             filename = args.get("filename")
             prompt = args.get("prompt")
             size = args.get("size")
+            image_size = args.get("image_size")
 
-            token, model = load_config()
+            token, model, img_size = load_config()
+            if image_size:
+                img_size = image_size
 
             if tool_name == "generate_mc_block":
                 out_path = generate_mc_block(token, model, item_name, save_path, filename, prompt,
-                                              size if size else DEFAULT_SIZE)
+                                              size if size else DEFAULT_SIZE, img_size)
             elif tool_name == "generate_mc_buff":
                 out_path = generate_mc_buff(token, model, item_name, save_path, filename, prompt,
                                              size if size else DEFAULT_BUFF_SIZE,
-                                             bool(args.get("keep_background", False)))
+                                             bool(args.get("keep_background", False)), img_size)
             else:
                 out_path = generate_mc_pixelart(token, model, item_name, save_path, filename, prompt,
-                                                 size if size else DEFAULT_SIZE)
+                                                 size if size else DEFAULT_SIZE, img_size)
 
         return _rpc_response(req_id, {
             "content": [{"type": "text", "text": f"Image saved to: {out_path}"}],

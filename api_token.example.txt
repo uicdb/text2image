@@ -5,6 +5,8 @@
 # apikey: SiliconFlow API 密钥，从 https://cloud.siliconflow.cn 获取
 # model:  可选，Kwai-Kolors/Kolors 或 Tongyi-MAI/Z-Image-Turbo
 #         不填默认使用 Kwai-Kolors/Kolors
+# image_size: 可选 WxH 格式。Kolors 默认 1024x1024，Tongyi 默认 1328x1328
 #
 apikey=sk-your-api-key-here
 model=Kwai-Kolors/Kolors
+#image_size=1024x1024

@@ -15,6 +15,13 @@ DEFAULT_BUFF_SIZE = 72
 AVAILABLE_MODELS = ["Kwai-Kolors/Kolors", "Tongyi-MAI/Z-Image-Turbo"]
 DEFAULT_MODEL = "Kwai-Kolors/Kolors"
 
+# Model-specific recommended image sizes
+MODEL_IMAGE_SIZES = {
+    "Kwai-Kolors/Kolors": "1024x1024",
+    "Tongyi-MAI/Z-Image-Turbo": "1328x1328",
+}
+DEFAULT_IMAGE_SIZE = "1024x1024"
+
 # ── Item prompt (from tool/提示词.txt) ──
 ITEM_POSITIVE = (
     "game texture map, Minecraft style, pixel art item icon, "
@@ -61,6 +68,7 @@ def load_config():
     File format (one per line, # for comments):
         apikey=sk-your-api-key
         model=Kwai-Kolors/Kolors
+        image_size=1024x1024   (optional, auto-detected if not set)
     """
     path = os.path.abspath(TOKEN_FILE)
     if not os.path.exists(path):
@@ -70,6 +78,7 @@ def load_config():
 
     token = None
     model = DEFAULT_MODEL
+    image_size = None
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -84,6 +93,8 @@ def load_config():
                 token = value
             elif key == "model":
                 model = value
+            elif key == "image_size":
+                image_size = value
 
     if not token or token == "sk-your-api-key-here":
         print("[ERROR] Please set apikey= in api_token.txt")
@@ -93,17 +104,21 @@ def load_config():
         print(f"[WARN] Unknown model '{model}', falling back to {DEFAULT_MODEL}")
         model = DEFAULT_MODEL
 
-    return token, model
+    if not image_size:
+        image_size = MODEL_IMAGE_SIZES.get(model, DEFAULT_IMAGE_SIZE)
+
+    return token, model, image_size
 
 
 def generate_image(token: str, model: str, prompt: str,
                     style_positive: str = ITEM_POSITIVE,
-                    style_negative: str = ITEM_NEGATIVE) -> Image.Image:
+                    style_negative: str = ITEM_NEGATIVE,
+                    image_size: str = DEFAULT_IMAGE_SIZE) -> Image.Image:
     payload = {
         "model": model,
         "prompt": f"{prompt}, {style_positive}",
         "negative_prompt": style_negative,
-        "image_size": "1024x1024",
+        "image_size": image_size,
         "batch_size": 1,
         "num_inference_steps": 20,
         "guidance_scale": 7.5,
@@ -228,7 +243,8 @@ def generate_mc_pixelart(token: str, model: str, item: str,
                           save_path: str | None = None,
                           filename: str | None = None,
                           prompt: str | None = None,
-                          size: int = DEFAULT_SIZE) -> str:
+                          size: int = DEFAULT_SIZE,
+                          image_size: str | None = None) -> str:
     """Generate a Minecraft pixel art item icon and save to disk.
 
     Returns the absolute path to the saved file.
@@ -237,8 +253,9 @@ def generate_mc_pixelart(token: str, model: str, item: str,
         full_prompt = prompt
     else:
         full_prompt = item
+    img_size = image_size or MODEL_IMAGE_SIZES.get(model, DEFAULT_IMAGE_SIZE)
 
-    img = generate_image(token, model, full_prompt, ITEM_POSITIVE, ITEM_NEGATIVE)
+    img = generate_image(token, model, full_prompt, ITEM_POSITIVE, ITEM_NEGATIVE, img_size)
 
     img = remove_solid_background(img)
     scaled = scale_pixel_art(img, (size, size))
@@ -256,7 +273,8 @@ def generate_mc_block(token: str, model: str, name: str,
                        save_path: str | None = None,
                        filename: str | None = None,
                        prompt: str | None = None,
-                       size: int = DEFAULT_SIZE) -> str:
+                       size: int = DEFAULT_SIZE,
+                       image_size: str | None = None) -> str:
     """Generate a Minecraft block texture and save to disk.
 
     Returns the absolute path to the saved file.
@@ -265,8 +283,9 @@ def generate_mc_block(token: str, model: str, name: str,
         full_prompt = prompt
     else:
         full_prompt = name
+    img_size = image_size or MODEL_IMAGE_SIZES.get(model, DEFAULT_IMAGE_SIZE)
 
-    img = generate_image(token, model, full_prompt, BLOCK_POSITIVE, BLOCK_NEGATIVE)
+    img = generate_image(token, model, full_prompt, BLOCK_POSITIVE, BLOCK_NEGATIVE, img_size)
 
     img = remove_solid_background(img)
     scaled = scale_pixel_art(img, (size, size))
@@ -285,7 +304,8 @@ def generate_mc_buff(token: str, model: str, name: str,
                       filename: str | None = None,
                       prompt: str | None = None,
                       size: int = DEFAULT_BUFF_SIZE,
-                      keep_background: bool = False) -> str:
+                      keep_background: bool = False,
+                      image_size: str | None = None) -> str:
     """Generate a Minecraft buff/status effect icon and save to disk.
 
     Returns the absolute path to the saved file.
@@ -294,8 +314,9 @@ def generate_mc_buff(token: str, model: str, name: str,
         full_prompt = prompt
     else:
         full_prompt = name
+    img_size = image_size or MODEL_IMAGE_SIZES.get(model, DEFAULT_IMAGE_SIZE)
 
-    img = generate_image(token, model, full_prompt, BUFF_POSITIVE, BUFF_NEGATIVE)
+    img = generate_image(token, model, full_prompt, BUFF_POSITIVE, BUFF_NEGATIVE, img_size)
 
     if not keep_background:
         img = remove_solid_background(img)
@@ -307,6 +328,62 @@ def generate_mc_buff(token: str, model: str, name: str,
     out_path = os.path.join(out_dir, out_name)
 
     scaled.save(out_path, "PNG")
+    return os.path.abspath(out_path)
+
+
+def generate_image_raw(token: str, model: str, prompt: str, negative: str = "",
+                         save_path: str | None = None,
+                         filename: str | None = None,
+                         image_size: str | None = None) -> str:
+    """Generate a raw AI image without any pixel-art style prompts or post-processing.
+
+    Returns the absolute path to the saved file.
+    """
+    img_size = image_size or MODEL_IMAGE_SIZES.get(model, DEFAULT_IMAGE_SIZE)
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "negative_prompt": negative,
+        "image_size": img_size,
+        "batch_size": 1,
+        "num_inference_steps": 20,
+        "guidance_scale": 7.5,
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    print("Generating raw image via SiliconFlow API ...")
+    resp = requests.post(API_URL, json=payload, headers=headers, timeout=120)
+    resp.raise_for_status()
+    data = resp.json()
+
+    images = data.get("images", [])
+    if not images:
+        print("[ERROR] No images in response:", data)
+        sys.exit(1)
+
+    image_obj = images[0]
+    b64_str = image_obj.get("b64_json", "")
+    if b64_str:
+        if b64_str.startswith("data:"):
+            b64_str = b64_str.split(",", 1)[1]
+        img = Image.open(BytesIO(base64.b64decode(b64_str))).convert("RGBA")
+    else:
+        url = image_obj.get("url", "")
+        if not url:
+            print("[ERROR] No image data in response:", image_obj)
+            sys.exit(1)
+        print(f"Downloading image from: {url}")
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+        img = Image.open(BytesIO(resp.content)).convert("RGBA")
+
+    out_dir = save_path if save_path else os.path.dirname(__file__)
+    os.makedirs(out_dir, exist_ok=True)
+    out_name = _ensure_png_ext(filename) if filename else "image_raw.png"
+    out_path = os.path.join(out_dir, out_name)
+    img.save(out_path, "PNG")
     return os.path.abspath(out_path)
 
 
@@ -338,7 +415,7 @@ def rotate_pixel_art(input_path: str, save_path: str,
 
 
 def main():
-    token, model = load_config()
+    token, model, image_size = load_config()
 
     # Parse CLI: [--block] [--model MODEL] [item_name]
     args = sys.argv[1:]
@@ -359,11 +436,11 @@ def main():
             item = args[i]
             i += 1
 
-    print(f"Mode: {mode}, Model: {model}")
+    print(f"Mode: {mode}, Model: {model}, Image size: {image_size}")
     if mode == "block":
-        out_path = generate_mc_block(token, model, item)
+        out_path = generate_mc_block(token, model, item, image_size=image_size)
     else:
-        out_path = generate_mc_pixelart(token, model, item)
+        out_path = generate_mc_pixelart(token, model, item, image_size=image_size)
     print(f"Saved: {out_path}")
 
 
