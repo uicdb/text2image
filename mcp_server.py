@@ -1,6 +1,6 @@
 """MCP server wrapping the Minecraft pixel art generator.
 
-Tools: generate_mc_pixelart, generate_mc_block, generate_mc_buff, generate_image_raw, rotate_pixel_art
+Tools: 13 MCP tools — image generation, processing, file & OCR utilities
 """
 
 import json
@@ -19,6 +19,8 @@ from generate_mc_pixelart import (  # noqa: E402
     recolor_image,
     colorize_grayscale,
     pixelate_image,
+    composite_colorized,
+    composite_layers,
     upload_file,
     list_files,
     image_ocr,
@@ -242,6 +244,76 @@ TOOLS = [
         },
     },
     {
+        "name": "composite_colorized",
+        "description": "Overlay colorized grayscale layers onto a base image. Useful for making ore textures (stone base + colored mineral highlights). Each overlay's luminance controls blend strength.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {
+                    "type": "string",
+                    "description": "Absolute path to the base image (e.g. stone texture)",
+                },
+                "overlays": {
+                    "type": "array",
+                    "description": "List of overlay layers. Each has 'path' (grayscale overlay image) and 'color' (hex color to tint)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Absolute path to grayscale overlay image"},
+                            "color": {"type": "string", "description": "Hex color (e.g. '#FFD700' for gold)"},
+                        },
+                        "required": ["path", "color"],
+                    },
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to composite_output.png",
+                },
+            },
+            "required": ["base_path", "overlays", "save_path"],
+        },
+    },
+    {
+        "name": "composite_layers",
+        "description": "Stack and composite multiple image layers with optional per-layer colorization. First layer is the base. Each subsequent layer can be colorized from grayscale, tinted, or kept as-is. Supports blend modes: normal, multiply, screen, overlay. Ideal for building complex machine textures from separate material layers.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layers": {
+                    "type": "array",
+                    "description": "List of layers, bottom to top. First layer is the base/background.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Absolute path to layer image"},
+                            "color": {"type": "string", "description": "Hex color to colorize grayscale pixels (e.g. '#FF4444'). Omit to keep original colors."},
+                            "blend_mode": {"type": "string", "description": "Blend mode: normal (default), multiply, screen, overlay"},
+                            "keep_rgb": {"type": "boolean", "description": "If true, tint the original RGB with the color instead of replacing with grayscale colorization. Default false."},
+                        },
+                        "required": ["path"],
+                    },
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to composite_layers.png",
+                },
+                "size": {
+                    "type": "array",
+                    "description": "Optional [width, height] canvas size. Defaults to first layer's size.",
+                },
+            },
+            "required": ["layers", "save_path"],
+        },
+    },
+    {
         "name": "recolor_image",
         "description": "Recolor an image by replacing a specific color or applying a hue overlay. Useful for creating monster/item variants (e.g. turn a red sword blue, or recolor a green zombie to purple).",
         "inputSchema": {
@@ -442,6 +514,27 @@ def handle_tools_call(req_id, params):
             out_path = pixelate_image(
                 input_path, save_path,
                 int(size) if size else DEFAULT_SIZE,
+                args.get("filename"),
+            )
+        elif tool_name == "composite_colorized":
+            base_path = args.get("base_path", "")
+            save_path = args.get("save_path", "")
+            overlays = args.get("overlays", [])
+            if not base_path or not save_path or not overlays:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            out_path = composite_colorized(
+                base_path, overlays, save_path,
+                args.get("filename"),
+            )
+        elif tool_name == "composite_layers":
+            layers = args.get("layers", [])
+            save_path = args.get("save_path", "")
+            if not layers or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            size = args.get("size")
+            out_path = composite_layers(
+                layers, save_path,
+                tuple(size) if size else None,
                 args.get("filename"),
             )
         elif tool_name == "recolor_image":

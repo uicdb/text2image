@@ -492,6 +492,171 @@ def generate_image_to_image(token: str, model: str, prompt: str, image_url: str,
     return os.path.abspath(out_path)
 
 
+def composite_colorized(base_path: str, overlays: list[dict], save_path: str,
+                        filename: str | None = None) -> str:
+    """Overlay colorized grayscale layers onto a base image.
+
+    Each overlay dict: {'path': str, 'color': '#hex'}
+    The overlay image's luminance controls blending strength —
+    brighter pixels apply more of the target color.
+
+    Returns the absolute path to the saved file.
+    """
+    base = Image.open(base_path).convert("RGBA")
+    bw, bh = base.size
+
+    for ol in overlays:
+        ov_path = ol["path"]
+        color = ol["color"]
+        target_r = int(color[1:3], 16)
+        target_g = int(color[3:5], 16)
+        target_b = int(color[5:7], 16)
+
+        overlay = Image.open(ov_path).convert("RGBA")
+        if overlay.size != (bw, bh):
+            overlay = overlay.resize((bw, bh), Image.NEAREST)
+
+        op = overlay.load()
+        bp = base.load()
+        for y in range(bh):
+            for x in range(bw):
+                or_, og, ob, oa = op[x, y]
+                if oa == 0:
+                    continue
+                # Use grayscale luminance + overlay alpha as blend factor
+                lum = (0.299 * or_ + 0.587 * og + 0.114 * ob) / 255.0
+                blend = min(1.0, lum * (oa / 255.0))
+                if blend < 0.01:
+                    continue
+                br, bg, bb, ba = bp[x, y]
+                # Overlay alpha wins: ore paints over transparent base areas too
+                out_a = max(ba, oa)
+                nr = int(br * (1 - blend) + target_r * blend)
+                ng = int(bg * (1 - blend) + target_g * blend)
+                nb = int(bb * (1 - blend) + target_b * blend)
+                bp[x, y] = (nr, ng, nb, out_a)
+
+        print(f"  Composited {os.path.basename(ov_path)} with {color}")
+
+    out_dir = save_path
+    os.makedirs(out_dir, exist_ok=True)
+    out_name = _ensure_png_ext(filename) if filename else "composite_output.png"
+    out_path = os.path.join(out_dir, out_name)
+    base.save(out_path, "PNG")
+    return os.path.abspath(out_path)
+
+
+def composite_layers(layers: list[dict], save_path: str,
+                      size: tuple[int, int] | None = None,
+                      filename: str | None = None) -> str:
+    """Stack and composite multiple image layers with optional per-layer colorization.
+
+    Each layer dict:
+        path:       str   — image file path
+        color:      str   — hex color to tint grayscale pixels (optional)
+        blend_mode: str   — 'normal' (default), 'multiply', 'screen', 'overlay'
+        keep_rgb:   bool  — if True, keep original RGB even when color is set
+                             (colorize only areas where original pixels are not transparent)
+
+    The first layer determines canvas size (unless size is given).
+    Layers stack bottom-to-top. Colorized layers use luminance-weighted
+    blending — brighter pixels apply more of the target color.
+
+    Returns the absolute path to the saved file.
+    """
+    if not layers:
+        raise ValueError("At least one layer required")
+
+    # Determine canvas size from first layer
+    first = Image.open(layers[0]["path"]).convert("RGBA")
+    canvas_size = size if size else first.size
+    canvas = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    if first.size != canvas_size:
+        first = first.resize(canvas_size, Image.NEAREST)
+    fp = first.load()
+    cp = canvas.load()
+    for y in range(canvas_size[1]):
+        for x in range(canvas_size[0]):
+            r, g, b, a = fp[x, y]
+            if a > 0:
+                cp[x, y] = (r, g, b, a)
+    print(f"  Layer 1 (base): {os.path.basename(layers[0]['path'])}")
+
+    # Stack remaining layers
+    for i, layer in enumerate(layers[1:], start=2):
+        img = Image.open(layer["path"]).convert("RGBA")
+        if img.size != canvas_size:
+            img = img.resize(canvas_size, Image.NEAREST)
+        color = layer.get("color")
+        blend_mode = layer.get("blend_mode", "normal")
+        keep_rgb = layer.get("keep_rgb", False)
+
+        ip = img.load()
+        for y in range(canvas_size[1]):
+            for x in range(canvas_size[0]):
+                ir, ig, ib, ia = ip[x, y]
+                if ia == 0:
+                    continue
+                cr, cg, cb, ca = cp[x, y]
+
+                if color and not keep_rgb:
+                    # Colorize grayscale overlay
+                    tr = int(color[1:3], 16)
+                    tg = int(color[3:5], 16)
+                    tb = int(color[5:7], 16)
+                    lum = (0.299 * ir + 0.587 * ig + 0.114 * ib) / 255.0
+                    blend = min(1.0, lum * (ia / 255.0))
+                    if blend < 0.01:
+                        continue
+                    nr = int(cr * (1 - blend) + tr * blend)
+                    ng = int(cg * (1 - blend) + tg * blend)
+                    nb = int(cb * (1 - blend) + tb * blend)
+                elif color and keep_rgb:
+                    # Tint only: mix target color with original RGB
+                    tr = int(color[1:3], 16)
+                    tg = int(color[3:5], 16)
+                    tb = int(color[5:7], 16)
+                    blend = ia / 255.0
+                    nr = int(ir * (1 - blend * 0.5) + tr * blend * 0.5)
+                    ng = int(ig * (1 - blend * 0.5) + tg * blend * 0.5)
+                    nb = int(ib * (1 - blend * 0.5) + tb * blend * 0.5)
+                else:
+                    nr, ng, nb = ir, ig, ib
+
+                if blend_mode == "multiply":
+                    nr = int(cr * nr / 255)
+                    ng = int(cg * ng / 255)
+                    nb = int(cb * nb / 255)
+                elif blend_mode == "screen":
+                    nr = 255 - int((255 - cr) * (255 - nr) / 255)
+                    ng = 255 - int((255 - cg) * (255 - ng) / 255)
+                    nb = 255 - int((255 - cb) * (255 - nb) / 255)
+                elif blend_mode == "overlay":
+                    nr = int(cr * cr / 255 * 2) if cr < 128 else 255 - int((255 - cr) * (255 - cr) / 255 * 2)
+                    ng = int(cg * cg / 255 * 2) if cg < 128 else 255 - int((255 - cg) * (255 - cg) / 255 * 2)
+                    nb = int(cb * cb / 255 * 2) if cb < 128 else 255 - int((255 - cb) * (255 - cb) / 255 * 2)
+                    nr = int(nr * 0.5 + nr * 0.5)
+                    ng = int(ng * 0.5 + ng * 0.5)
+                    nb = int(nb * 0.5 + nb * 0.5)
+
+                out_a = max(ca, ia)
+                cp[x, y] = (nr, ng, nb, out_a)
+
+        parts = [os.path.basename(layer['path'])]
+        if color:
+            parts.append(color)
+        if blend_mode != "normal":
+            parts.append(blend_mode)
+        print(f"  Layer {i}: {' | '.join(parts)}")
+
+    out_dir = save_path
+    os.makedirs(out_dir, exist_ok=True)
+    out_name = _ensure_png_ext(filename) if filename else "composite_layers.png"
+    out_path = os.path.join(out_dir, out_name)
+    canvas.save(out_path, "PNG")
+    return os.path.abspath(out_path)
+
+
 def pixelate_image(input_path: str, save_path: str,
                     size: int = DEFAULT_SIZE,
                     filename: str | None = None) -> str:
