@@ -2,6 +2,7 @@ import requests
 import base64
 import os
 import sys
+import time
 from io import BytesIO
 from PIL import Image
 
@@ -13,6 +14,30 @@ BUFF_SIZE_OPTIONS = [18, 36, 72, 144, 288, 324]
 DEFAULT_SIZE = 64
 DEFAULT_BUFF_SIZE = 72
 AVAILABLE_MODELS = ["Kwai-Kolors/Kolors", "Tongyi-MAI/Z-Image-Turbo"]
+FALLBACK_MODEL = "Tongyi-MAI/Z-Image-Turbo"
+RATE_LIMIT_CALLS = 2
+RATE_LIMIT_WINDOW = 65  # seconds, includes 5s tolerance over 60s
+
+# ── Rate limiter ──
+_model_timestamps: dict[str, list[float]] = {}
+
+
+def _check_rate_and_switch(model: str) -> str:
+    """Auto-switch to fallback model if the current model is rate-limited."""
+    now = time.time()
+    _model_timestamps.setdefault(model, [])
+    # Clean old timestamps
+    _model_timestamps[model] = [t for t in _model_timestamps[model]
+                                  if now - t < RATE_LIMIT_WINDOW]
+    if len(_model_timestamps[model]) >= RATE_LIMIT_CALLS:
+        print(f"[Rate] {model} hit rate limit ({RATE_LIMIT_CALLS} calls in {RATE_LIMIT_WINDOW}s), "
+              f"switching to {FALLBACK_MODEL}")
+        return FALLBACK_MODEL
+    return model
+
+
+def _record_call(model: str) -> None:
+    _model_timestamps.setdefault(model, []).append(time.time())
 DEFAULT_MODEL = "Kwai-Kolors/Kolors"
 
 # Model-specific recommended image sizes
@@ -114,6 +139,7 @@ def generate_image(token: str, model: str, prompt: str,
                     style_positive: str = ITEM_POSITIVE,
                     style_negative: str = ITEM_NEGATIVE,
                     image_size: str = DEFAULT_IMAGE_SIZE) -> Image.Image:
+    model = _check_rate_and_switch(model)
     payload = {
         "model": model,
         "prompt": f"{prompt}, {style_positive}",
@@ -128,8 +154,9 @@ def generate_image(token: str, model: str, prompt: str,
         "Content-Type": "application/json",
     }
 
-    print("Generating image via SiliconFlow API ...")
+    print(f"Generating image via SiliconFlow API (model={model}) ...")
     resp = requests.post(API_URL, json=payload, headers=headers, timeout=120)
+    _record_call(model)
     resp.raise_for_status()
     data = resp.json()
 
@@ -331,6 +358,28 @@ def generate_mc_buff(token: str, model: str, name: str,
     return os.path.abspath(out_path)
 
 
+def _download_api_image(data: dict) -> Image.Image:
+    """Extract and download an image from a SiliconFlow API response."""
+    images = data.get("images", [])
+    if not images:
+        print("[ERROR] No images in response:", data)
+        sys.exit(1)
+    image_obj = images[0]
+    b64_str = image_obj.get("b64_json", "")
+    if b64_str:
+        if b64_str.startswith("data:"):
+            b64_str = b64_str.split(",", 1)[1]
+        return Image.open(BytesIO(base64.b64decode(b64_str))).convert("RGBA")
+    url = image_obj.get("url", "")
+    if url:
+        print(f"Downloading image from: {url}")
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+        return Image.open(BytesIO(resp.content)).convert("RGBA")
+    print("[ERROR] No image data in response:", image_obj)
+    sys.exit(1)
+
+
 def generate_image_raw(token: str, model: str, prompt: str, negative: str = "",
                          save_path: str | None = None,
                          filename: str | None = None,
@@ -339,6 +388,7 @@ def generate_image_raw(token: str, model: str, prompt: str, negative: str = "",
 
     Returns the absolute path to the saved file.
     """
+    model = _check_rate_and_switch(model)
     img_size = image_size or MODEL_IMAGE_SIZES.get(model, DEFAULT_IMAGE_SIZE)
     payload = {
         "model": model,
@@ -353,8 +403,9 @@ def generate_image_raw(token: str, model: str, prompt: str, negative: str = "",
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    print("Generating raw image via SiliconFlow API ...")
+    print(f"Generating raw image via SiliconFlow API (model={model}) ...")
     resp = requests.post(API_URL, json=payload, headers=headers, timeout=120)
+    _record_call(model)
     resp.raise_for_status()
     data = resp.json()
 
@@ -385,6 +436,253 @@ def generate_image_raw(token: str, model: str, prompt: str, negative: str = "",
     out_path = os.path.join(out_dir, out_name)
     img.save(out_path, "PNG")
     return os.path.abspath(out_path)
+
+
+def generate_image_to_image(token: str, model: str, prompt: str, image_url: str,
+                             negative: str = "", save_path: str | None = None,
+                             filename: str | None = None,
+                             image_size: str | None = None,
+                             mc_style: bool = False) -> str:
+    """Generate an AI image based on a reference image and prompt.
+
+    Args:
+        image_url: URL of the reference image. Must be a publicly accessible URL.
+        mc_style: If True, append Minecraft pixel-art style prompts and post-process.
+
+    Returns the absolute path to the saved file.
+    """
+    model = _check_rate_and_switch(model)
+    img_size = image_size or MODEL_IMAGE_SIZES.get(model, DEFAULT_IMAGE_SIZE)
+    full_prompt = prompt
+    full_negative = negative
+    if mc_style:
+        full_prompt = f"{prompt}, {ITEM_POSITIVE}"
+        full_negative = f"{negative}, {ITEM_NEGATIVE}" if negative else ITEM_NEGATIVE
+
+    payload = {
+        "model": model,
+        "prompt": full_prompt,
+        "negative_prompt": full_negative,
+        "image": image_url,
+        "image_size": img_size,
+        "batch_size": 1,
+        "num_inference_steps": 20,
+        "guidance_scale": 7.5,
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    print(f"Generating image-to-image via SiliconFlow API (model={model}) ...")
+    resp = requests.post(API_URL, json=payload, headers=headers, timeout=120)
+    _record_call(model)
+    resp.raise_for_status()
+    data = resp.json()
+
+    img = _download_api_image(data)
+    if mc_style:
+        img = remove_solid_background(img)
+        img = scale_pixel_art(img, (DEFAULT_SIZE, DEFAULT_SIZE))
+
+    out_dir = save_path if save_path else os.path.dirname(__file__)
+    os.makedirs(out_dir, exist_ok=True)
+    out_name = _ensure_png_ext(filename) if filename else "image2image.png"
+    out_path = os.path.join(out_dir, out_name)
+    img.save(out_path, "PNG")
+    return os.path.abspath(out_path)
+
+
+def pixelate_image(input_path: str, save_path: str,
+                    size: int = DEFAULT_SIZE,
+                    filename: str | None = None) -> str:
+    """Convert any image to Minecraft pixel-art style.
+
+    Applies background removal + nearest-neighbor downscale, exactly like
+    the post-processing pipeline used by generate_mc_pixelart, but
+    without calling the AI generation API.
+
+    Returns the absolute path to the saved file.
+    """
+    img = Image.open(input_path).convert("RGBA")
+    img = remove_solid_background(img)
+    scaled = scale_pixel_art(img, (size, size))
+
+    out_dir = save_path
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(input_path))[0]
+    out_name = _ensure_png_ext(filename) if filename else f"{base}_pixel_{size}x{size}.png"
+    out_path = os.path.join(out_dir, out_name)
+    scaled.save(out_path, "PNG")
+    return os.path.abspath(out_path)
+
+
+def recolor_image(input_path: str, save_path: str, color: str,
+                    from_color: str | None = None,
+                    filename: str | None = None,
+                    tolerance: int = 60,
+                    smooth: bool = False) -> str:
+    """Replace one color with another, or shift the hue of the entire image.
+
+    Args:
+        input_path: Path to the source image.
+        color: Target color in hex format (e.g. '#FF4444'). If from_color is
+               omitted, applies a hue shift toward this color to all pixels.
+        from_color: Source color to replace (hex). If specified, only pixels
+                    matching this color (within tolerance) are changed.
+        tolerance: Euclidean distance tolerance for from_color matching.
+        smooth: If True, blend proportionally rather than hard replace.
+                Pixels closer to from_color shift more toward color;
+                pixels at tolerance distance stay unchanged.
+    """
+    img = Image.open(input_path).convert("RGBA")
+    target_r = int(color[1:3], 16)
+    target_g = int(color[3:5], 16)
+    target_b = int(color[5:7], 16)
+
+    if from_color:
+        src_r = int(from_color[1:3], 16)
+        src_g = int(from_color[3:5], 16)
+        src_b = int(from_color[5:7], 16)
+        tol_sq = tolerance * tolerance
+        pixels = img.load()
+        changed = 0
+        for y in range(img.height):
+            for x in range(img.width):
+                r, g, b, a = pixels[x, y]
+                if a == 0:
+                    continue
+                dist = (r - src_r) ** 2 + (g - src_g) ** 2 + (b - src_b) ** 2
+                if dist <= tol_sq:
+                    if smooth:
+                        # Proportional blend: closer pixels shift more
+                        t = 1.0 - (dist / tol_sq) ** 0.5  # 0=far, 1=exact match
+                        nr = int(r + (target_r - r) * t)
+                        ng = int(g + (target_g - g) * t)
+                        nb = int(b + (target_b - b) * t)
+                    else:
+                        nr, ng, nb = target_r, target_g, target_b
+                    pixels[x, y] = (nr, ng, nb, a)
+                    changed += 1
+        print(f"Recolored {changed} pixels from {from_color} -> {color}" +
+              (" (smooth)" if smooth else ""))
+    else:
+        # Hue overlay mode: blend target color based on pixel luminance
+        pixels = img.load()
+        for y in range(img.height):
+            for x in range(img.width):
+                r, g, b, a = pixels[x, y]
+                if a == 0:
+                    continue
+                lum = int(0.299 * r + 0.587 * g + 0.114 * b)
+                nr = min(255, int(target_r * lum / 255 * 2))
+                ng = min(255, int(target_g * lum / 255 * 2))
+                nb = min(255, int(target_b * lum / 255 * 2))
+                nr = min(255, max(0, nr + (lum - 128)))
+                ng = min(255, max(0, ng + (lum - 128)))
+                nb = min(255, max(0, nb + (lum - 128)))
+                pixels[x, y] = (nr, ng, nb, a)
+        print(f"Applied hue overlay color {color}")
+
+    out_dir = save_path
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(input_path))[0]
+    tag = from_color.replace("#", "") if from_color else "hue"
+    out_name = _ensure_png_ext(filename) if filename else f"{base}_recolor_{tag}_{color.replace('#', '')}.png"
+    out_path = os.path.join(out_dir, out_name)
+    img.save(out_path, "PNG")
+    return os.path.abspath(out_path)
+
+
+def colorize_grayscale(input_path: str, save_path: str, color: str,
+                       filename: str | None = None,
+                       brightness: float = 1.0) -> str:
+    """Colorize a grayscale image with a target color.
+
+    Multiplies each pixel's luminance by the target color, producing a
+    tinted version while preserving the original brightness variation.
+
+    Args:
+        input_path: Path to the grayscale source image.
+        color: Target color in hex format (e.g. '#FF4444').
+        brightness: Output brightness multiplier (0.5 = darker, 1.5 = brighter).
+    """
+    img = Image.open(input_path).convert("RGBA")
+    target_r = int(color[1:3], 16)
+    target_g = int(color[3:5], 16)
+    target_b = int(color[5:7], 16)
+
+    pixels = img.load()
+    for y in range(img.height):
+        for x in range(img.width):
+            r, g, b, a = pixels[x, y]
+            if a == 0:
+                continue
+            lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+            nr = min(255, int(target_r * lum * brightness))
+            ng = min(255, int(target_g * lum * brightness))
+            nb = min(255, int(target_b * lum * brightness))
+            pixels[x, y] = (nr, ng, nb, a)
+
+    out_dir = save_path
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(input_path))[0]
+    out_name = _ensure_png_ext(filename) if filename else f"{base}_colorize_{color.replace('#', '')}.png"
+    out_path = os.path.join(out_dir, out_name)
+    img.save(out_path, "PNG")
+    print(f"Colorized with {color} (brightness={brightness})")
+    return os.path.abspath(out_path)
+
+
+# ── Utility: file upload / list / OCR ──
+
+def upload_file(token: str, file_path: str, purpose: str = "batch") -> dict:
+    """Upload a file to SiliconFlow and return the file info (id, filename, etc.)."""
+    url = "https://api.siliconflow.cn/v1/files"
+    headers = {"Authorization": f"Bearer {token}"}
+    with open(file_path, "rb") as f:
+        files = {"file": (os.path.basename(file_path), f)}
+        data = {"purpose": purpose}
+        resp = requests.post(url, headers=headers, data=data, files=files, timeout=60)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def list_files(token: str) -> list:
+    """List all uploaded files on SiliconFlow."""
+    url = "https://api.siliconflow.cn/v1/files"
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    result = resp.json()
+    return result.get("data", result) if isinstance(result, dict) else result
+
+
+def image_ocr(token: str, image_url: str, prompt: str = "What's in this image?",
+               max_tokens: int = 300) -> str:
+    """Run OCR / visual Q&A on an image using DeepSeek-OCR.
+
+    Args:
+        image_url: Publicly accessible URL of the image to analyze.
+        prompt: Question to ask about the image.
+    Returns the model's text response.
+    """
+    from openai import OpenAI
+    client = OpenAI(
+        api_key=token,
+        base_url="https://api.siliconflow.cn/v1",
+    )
+    resp = client.chat.completions.create(
+        model="deepseek-ai/DeepSeek-OCR",
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        }],
+        max_tokens=max_tokens,
+    )
+    return resp.choices[0].message.content or ""
 
 
 def rotate_pixel_art(input_path: str, save_path: str,

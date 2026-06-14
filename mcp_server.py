@@ -15,6 +15,13 @@ from generate_mc_pixelart import (  # noqa: E402
     generate_mc_block,
     generate_mc_buff,
     generate_image_raw,
+    generate_image_to_image,
+    recolor_image,
+    colorize_grayscale,
+    pixelate_image,
+    upload_file,
+    list_files,
+    image_ocr,
     rotate_pixel_art,
     SIZE_OPTIONS,
     BUFF_SIZE_OPTIONS,
@@ -52,6 +59,10 @@ TOOLS = [
                     "type": "integer",
                     "description": SIZE_DESC + str(DEFAULT_SIZE) + ".",
                 },
+                "model": {
+                    "type": "string",
+                    "description": "Optional model override. Available: Kwai-Kolors/Kolors, Tongyi-MAI/Z-Image-Turbo.",
+                },
             },
             "required": ["name", "save_path"],
         },
@@ -81,6 +92,10 @@ TOOLS = [
                 "size": {
                     "type": "integer",
                     "description": SIZE_DESC + str(DEFAULT_SIZE) + ".",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional model override. Available: Kwai-Kolors/Kolors, Tongyi-MAI/Z-Image-Turbo.",
                 },
             },
             "required": ["name", "save_path"],
@@ -116,6 +131,10 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Set to true to keep the AI-generated background. Default false (background removed).",
                 },
+                "model": {
+                    "type": "string",
+                    "description": "Optional model override. Available: Kwai-Kolors/Kolors, Tongyi-MAI/Z-Image-Turbo.",
+                },
             },
             "required": ["name", "save_path"],
         },
@@ -146,8 +165,196 @@ TOOLS = [
                     "type": "string",
                     "description": "Image size in 'WxH' format. Auto-detected from model if not set.",
                 },
+                "model": {
+                    "type": "string",
+                    "description": "Optional model override. Defaults to api_token.txt setting. Available: Kwai-Kolors/Kolors, Tongyi-MAI/Z-Image-Turbo.",
+                },
             },
             "required": ["prompt", "save_path"],
+        },
+    },
+    {
+        "name": "generate_image_to_image",
+        "description": "Generate an AI image based on a reference image URL plus a prompt. The reference image guides the composition/style while the prompt describes desired changes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Prompt describing the desired output image",
+                },
+                "image_url": {
+                    "type": "string",
+                    "description": "Publicly accessible URL of the reference image to transform",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the generated PNG file",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to image2image.png",
+                },
+                "negative_prompt": {
+                    "type": "string",
+                    "description": "Negative prompt — what to avoid in the image.",
+                },
+                "image_size": {
+                    "type": "string",
+                    "description": "Image size in 'WxH' format. Auto-detected from model if not set.",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional model override. Defaults to the model in api_token.txt. Available: Kwai-Kolors/Kolors, Tongyi-MAI/Z-Image-Turbo.",
+                },
+                "mc_style": {
+                    "type": "boolean",
+                    "description": "Set to true to apply Minecraft pixel-art styling and post-processing (background removal + 64x64 scaling).",
+                },
+            },
+            "required": ["prompt", "image_url", "save_path"],
+        },
+    },
+    {
+        "name": "pixelate_image",
+        "description": "Convert any image to Minecraft pixel-art style: remove solid background + nearest-neighbor scale to target size. No AI generation — pure image processing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "input_path": {
+                    "type": "string",
+                    "description": "Absolute path to the source image",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to <original>_pixel_<size>x<size>.png",
+                },
+                "size": {
+                    "type": "integer",
+                    "description": "Output size in pixels (16, 32, 64, 128, 256, 1024). Default 64.",
+                },
+            },
+            "required": ["input_path", "save_path"],
+        },
+    },
+    {
+        "name": "recolor_image",
+        "description": "Recolor an image by replacing a specific color or applying a hue overlay. Useful for creating monster/item variants (e.g. turn a red sword blue, or recolor a green zombie to purple).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "input_path": {
+                    "type": "string",
+                    "description": "Absolute path to the source image file",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Target color in hex format (e.g. '#FF4444' for red)",
+                },
+                "from_color": {
+                    "type": "string",
+                    "description": "Source color to replace in hex format. If omitted, applies a color tint overlay to the entire image.",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to <original>_recolor_<color>.png",
+                },
+                "tolerance": {
+                    "type": "integer",
+                    "description": "Color matching tolerance when from_color is specified (0-255). Default 60.",
+                },
+                "smooth": {
+                    "type": "boolean",
+                    "description": "If true, blend colors proportionally instead of hard replacement. Closer pixels shift more toward target; far pixels stay closer to original. Default false.",
+                },
+            },
+            "required": ["input_path", "save_path", "color"],
+        },
+    },
+    {
+        "name": "colorize_grayscale",
+        "description": "Colorize a grayscale image with a target color. Multiplies each pixel's luminance by the target color, creating a tinted variant.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "input_path": {
+                    "type": "string",
+                    "description": "Absolute path to the grayscale source image",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Target color in hex format (e.g. '#3498DB' for blue)",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to <original>_colorize_<color>.png",
+                },
+                "brightness": {
+                    "type": "number",
+                    "description": "Brightness multiplier. 1.0 = normal, 0.5 = darker, 1.5 = brighter. Default 1.0.",
+                },
+            },
+            "required": ["input_path", "save_path", "color"],
+        },
+    },
+    {
+        "name": "upload_file",
+        "description": "Upload a local file to SiliconFlow API. Returns file info including ID that can be used for batch processing or image-to-image reference.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the local file to upload",
+                },
+                "purpose": {
+                    "type": "string",
+                    "description": "File purpose, e.g. 'batch'. Default 'batch'.",
+                },
+            },
+            "required": ["file_path"],
+        },
+    },
+    {
+        "name": "list_files",
+        "description": "List all files uploaded to SiliconFlow API.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "image_ocr",
+        "description": "Run OCR / visual question-answering on an image using DeepSeek-OCR. Provide an image URL and a question about it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string",
+                    "description": "Publicly accessible URL of the image to analyze",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Question to ask about the image. Default: 'What\\'s in this image?'",
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "description": "Maximum tokens in response. Default 300.",
+                },
+            },
+            "required": ["image_url"],
         },
     },
     {
@@ -226,6 +433,72 @@ def handle_tools_call(req_id, params):
                 args.get("filename"),
                 float(args.get("angle", 45.0)),
             )
+        elif tool_name == "pixelate_image":
+            input_path = args.get("input_path", "")
+            save_path = args.get("save_path", "")
+            if not input_path or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            size = args.get("size", DEFAULT_SIZE)
+            out_path = pixelate_image(
+                input_path, save_path,
+                int(size) if size else DEFAULT_SIZE,
+                args.get("filename"),
+            )
+        elif tool_name == "recolor_image":
+            input_path = args.get("input_path", "")
+            save_path = args.get("save_path", "")
+            color = args.get("color", "")
+            if not input_path or not save_path or not color:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            out_path = recolor_image(
+                input_path, save_path, color,
+                args.get("from_color"),
+                args.get("filename"),
+                int(args.get("tolerance", 60)),
+                bool(args.get("smooth", False)),
+            )
+        elif tool_name == "colorize_grayscale":
+            input_path = args.get("input_path", "")
+            save_path = args.get("save_path", "")
+            color = args.get("color", "")
+            if not input_path or not save_path or not color:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            out_path = colorize_grayscale(
+                input_path, save_path, color,
+                args.get("filename"),
+                float(args.get("brightness", 1.0)),
+            )
+        elif tool_name == "upload_file":
+            file_path = args.get("file_path", "")
+            if not file_path:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'file_path'")
+            token, _, _ = load_config()
+            result = upload_file(token, file_path, args.get("purpose", "batch"))
+            return _rpc_response(req_id, {
+                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+                "file_info": result,
+            })
+        elif tool_name == "list_files":
+            token, _, _ = load_config()
+            result = list_files(token)
+            return _rpc_response(req_id, {
+                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+                "files": result,
+            })
+        elif tool_name == "image_ocr":
+            image_url = args.get("image_url", "")
+            if not image_url:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'image_url'")
+            token, _, _ = load_config()
+            text = image_ocr(
+                token, image_url,
+                args.get("prompt", "What's in this image?"),
+                int(args.get("max_tokens", 300)),
+            )
+            return _rpc_response(req_id, {
+                "content": [{"type": "text", "text": text}],
+                "ocr_result": text,
+            })
         elif tool_name == "generate_image_raw":
             prompt = args.get("prompt", "")
             save_path = args.get("save_path", "")
@@ -234,6 +507,8 @@ def handle_tools_call(req_id, params):
             if not save_path:
                 return _rpc_error(req_id, -32602, "Missing required parameter: 'save_path'")
             token, model, img_size = load_config()
+            if args.get("model"):
+                model = args["model"]
             image_size = args.get("image_size")
             out_path = generate_image_raw(
                 token, model, prompt,
@@ -241,6 +516,28 @@ def handle_tools_call(req_id, params):
                 save_path,
                 args.get("filename"),
                 image_size if image_size else img_size,
+            )
+        elif tool_name == "generate_image_to_image":
+            prompt = args.get("prompt", "")
+            image_url = args.get("image_url", "")
+            save_path = args.get("save_path", "")
+            if not prompt:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'prompt'")
+            if not image_url:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'image_url'")
+            if not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'save_path'")
+            token, model, img_size = load_config()
+            if args.get("model"):
+                model = args["model"]
+            image_size = args.get("image_size")
+            out_path = generate_image_to_image(
+                token, model, prompt, image_url,
+                args.get("negative_prompt", ""),
+                save_path,
+                args.get("filename"),
+                image_size if image_size else img_size,
+                bool(args.get("mc_style", False)),
             )
         else:
             item_name = args.get("name", "")
@@ -256,6 +553,8 @@ def handle_tools_call(req_id, params):
             image_size = args.get("image_size")
 
             token, model, img_size = load_config()
+            if args.get("model"):
+                model = args["model"]
             if image_size:
                 img_size = image_size
 
