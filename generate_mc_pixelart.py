@@ -878,22 +878,27 @@ def rotate_pixel_art(input_path: str, save_path: str,
 
 
 def generate_ore_texture(name: str, color: str, save_path: str,
-                         filename: str | None = None) -> str:
+                         filename: str | None = None,
+                         deepslate: bool = False) -> str:
     """Generate an ore texture using standard stone base + ore overlay.
 
-    Automatically uses ore_background.png as the base and ore_overlay.png
-    as the grayscale overlay, colorizing it with the given color.
+    Automatically uses ore_background.png (or deepslate_ore_background.png)
+    as the base and ore_overlay.png as the grayscale overlay, colorizing
+    it with the given color.
 
     Args:
         name: Ore name (e.g. 'diamond', 'iron') for default filename.
         color: Hex color for the ore (e.g. '#00FFFF' for diamond).
         save_path: Directory to save the output.
-        filename: Custom output filename. Defaults to ore_<name>.png.
+        filename: Custom output filename. Defaults to ore_<name>.png
+                  (or deepslate_ore_<name>.png when deepslate=True).
+        deepslate: Use deepslate_ore_background.png instead of regular stone.
 
     Returns the absolute path to the saved file.
     """
     project_dir = os.path.dirname(os.path.abspath(__file__))
-    base_path = os.path.join(project_dir, "ore_background.png")
+    base_file = "deepslate_ore_background.png" if deepslate else "ore_background.png"
+    base_path = os.path.join(project_dir, base_file)
     overlay_path = os.path.join(project_dir, "ore_overlay.png")
 
     if not os.path.exists(base_path):
@@ -902,7 +907,8 @@ def generate_ore_texture(name: str, color: str, save_path: str,
         raise FileNotFoundError(f"Overlay texture not found: {overlay_path}")
 
     overlays = [{"path": overlay_path, "color": color}]
-    out_name = _ensure_png_ext(filename) if filename else f"ore_{name}.png"
+    prefix = "deepslate_ore_" if deepslate else "ore_"
+    out_name = _ensure_png_ext(filename) if filename else f"{prefix}{name}.png"
 
     return composite_colorized(base_path, overlays, save_path, out_name)
 

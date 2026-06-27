@@ -316,7 +316,7 @@ TOOLS = [
     },
     {
         "name": "generate_ore_texture",
-        "description": "Generate a Minecraft ore texture by compositing the standard stone base (ore_background.png) with the ore overlay (ore_overlay.png) colorized to the given color. A simplified ore generation — just pass a name and color, no need to specify file paths.",
+        "description": "Generate a Minecraft ore texture by compositing a stone base with the ore overlay colorized to the given color. Auto-uses ore_background.png (or deepslate_ore_background.png if deepslate=true). A simplified ore generation — just pass a name and color.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -334,7 +334,11 @@ TOOLS = [
                 },
                 "filename": {
                     "type": "string",
-                    "description": "Output filename, defaults to ore_<name>.png",
+                    "description": "Output filename, defaults to ore_<name>.png (or deepslate_ore_<name>.png)",
+                },
+                "deepslate": {
+                    "type": "boolean",
+                    "description": "Use deepslate_ore_background.png instead of regular stone. Default false.",
                 },
             },
             "required": ["name", "color", "save_path"],
@@ -573,6 +577,7 @@ def handle_tools_call(req_id, params):
             out_path = generate_ore_texture(
                 name, color, save_path,
                 args.get("filename"),
+                bool(args.get("deepslate", False)),
             )
         elif tool_name == "recolor_image":
             input_path = args.get("input_path", "")
