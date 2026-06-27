@@ -1,6 +1,6 @@
 """MCP server wrapping the Minecraft pixel art generator.
 
-Tools: 15 MCP tools — image generation, processing, file & OCR utilities
+Tools: 23 MCP tools — image generation, color analysis, wood/ore texture compositing, processing, file & OCR utilities
 """
 
 import json
@@ -22,6 +22,11 @@ from generate_mc_pixelart import (  # noqa: E402
     composite_colorized,
     composite_layers,
     generate_ore_texture,
+    colorize_template,
+    colorize_template_pair,
+    generate_sapling,
+    analyze_image_colors,
+    suggest_ore_colors,
     upload_file,
     list_files,
     image_ocr,
@@ -345,6 +350,192 @@ TOOLS = [
         },
     },
     {
+        "name": "generate_sapling",
+        "description": "Generate a Minecraft sapling texture by compositing sapling_body.png and sapling_leaves.png, each independently colorized.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Wood/plant name (e.g. 'oak', 'birch', 'jungle'). Used in default filename.",
+                },
+                "body_color": {
+                    "type": "string",
+                    "description": "Hex color for the sapling body/stem (e.g. '#8B6914' for dark wood).",
+                },
+                "leaves_color": {
+                    "type": "string",
+                    "description": "Hex color for the leaves (e.g. '#228B22' for forest green).",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to sapling_<name>.png",
+                },
+            },
+            "required": ["name", "body_color", "leaves_color", "save_path"],
+        },
+    },
+    {
+        "name": "generate_planks",
+        "description": "Generate a Minecraft planks texture by colorizing the planks.png grayscale template.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Wood name (e.g. 'oak', 'spruce'). Used in default filename.",
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Hex color for the planks (e.g. '#BC8F5A' for oak brown).",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to planks_<name>.png",
+                },
+            },
+            "required": ["name", "color", "save_path"],
+        },
+    },
+    {
+        "name": "generate_log",
+        "description": "Generate Minecraft log textures (side + top) by colorizing log.png and log_top.png templates.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Wood name (e.g. 'oak', 'birch'). Used in default filenames.",
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Hex color for the log side (e.g. '#8B6914' for oak brown).",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output images",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename for log side, defaults to log_<name>.png. Top gets _top suffix.",
+                },
+            },
+            "required": ["name", "color", "save_path"],
+        },
+    },
+    {
+        "name": "generate_stripped_log",
+        "description": "Generate Minecraft stripped log textures (side + top) by colorizing stripped_log.png and stripped_log_top.png templates.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Wood name (e.g. 'oak', 'birch'). Used in default filenames.",
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Hex color for the stripped log (e.g. '#C4A35A' for stripped oak).",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output images",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename for stripped log side, defaults to stripped_log_<name>.png.",
+                },
+            },
+            "required": ["name", "color", "save_path"],
+        },
+    },
+    {
+        "name": "generate_leaves",
+        "description": "Generate a Minecraft leaves texture by colorizing the leaves.png grayscale template.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Tree name (e.g. 'oak', 'spruce', 'jungle'). Used in default filename.",
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Hex color for the leaves (e.g. '#228B22' for forest green).",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to leaves_<name>.png",
+                },
+            },
+            "required": ["name", "color", "save_path"],
+        },
+    },
+    {
+        "name": "generate_door",
+        "description": "Generate Minecraft door textures (top + bottom) by colorizing door_top.png and door_bottom.png templates.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Wood name (e.g. 'oak', 'iron'). Used in default filenames.",
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Hex color for the door (e.g. '#8B6914' for oak brown).",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output images",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename for door top, defaults to door_<name>_top.png. Bottom gets _bottom suffix.",
+                },
+            },
+            "required": ["name", "color", "save_path"],
+        },
+    },
+    {
+        "name": "generate_trapdoor",
+        "description": "Generate a Minecraft trapdoor texture by colorizing the trapdoor.png grayscale template.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Wood name (e.g. 'oak', 'iron'). Used in default filename.",
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Hex color for the trapdoor (e.g. '#8B6914' for oak brown).",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to trapdoor_<name>.png",
+                },
+            },
+            "required": ["name", "color", "save_path"],
+        },
+    },
+    {
         "name": "recolor_image",
         "description": "Recolor an image by replacing a specific color or applying a hue overlay. Useful for creating monster/item variants (e.g. turn a red sword blue, or recolor a green zombie to purple).",
         "inputSchema": {
@@ -486,6 +677,28 @@ TOOLS = [
             "required": ["input_path", "save_path"],
         },
     },
+    {
+        "name": "analyze_image_colors",
+        "description": "Analyze an image's color palette — extract dominant colors with hex values and coverage percentages. Optionally suggest the most vibrant colors for ore/texture generation. Use this to: 1) get a color scheme from an AI-generated item, 2) automatically pick the best colors for composite ores and wood textures.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "input_path": {
+                    "type": "string",
+                    "description": "Absolute path to the image to analyze",
+                },
+                "max_colors": {
+                    "type": "integer",
+                    "description": "Maximum number of dominant colors to extract. Default 6.",
+                },
+                "suggest_ores": {
+                    "type": "boolean",
+                    "description": "If true, also return suggested ore colors (top 3 most saturated hex values). Default false.",
+                },
+            },
+            "required": ["input_path"],
+        },
+    },
 ]
 
 TOOL_NAMES = {t["name"] for t in TOOLS}
@@ -536,6 +749,25 @@ def handle_tools_call(req_id, params):
                 args.get("filename"),
                 float(args.get("angle", 45.0)),
             )
+        elif tool_name == "analyze_image_colors":
+            input_path = args.get("input_path", "")
+            if not input_path:
+                return _rpc_error(req_id, -32602, "Missing required parameter: 'input_path'")
+            analysis = analyze_image_colors(input_path, int(args.get("max_colors", 6)))
+            result = {
+                "analysis": analysis,
+                "total_colors": len(analysis),
+            }
+            summary_lines = [f"Color analysis ({len(analysis)} dominant colors):"]
+            for i, c in enumerate(analysis):
+                pct = f"{c['coverage'] * 100:.0f}%"
+                summary_lines.append(f"  {i + 1}. {c['hex']} — {pct}")
+            if args.get("suggest_ores"):
+                ore_colors = suggest_ore_colors(analysis)
+                result["ore_suggestions"] = ore_colors
+                summary_lines.append(f"\nSuggested ore colors: {', '.join(ore_colors)}")
+            result["content"] = [{"type": "text", "text": "\n".join(summary_lines)}]
+            return _rpc_response(req_id, result)
         elif tool_name == "pixelate_image":
             input_path = args.get("input_path", "")
             save_path = args.get("save_path", "")
@@ -579,6 +811,89 @@ def handle_tools_call(req_id, params):
                 args.get("filename"),
                 bool(args.get("deepslate", False)),
             )
+        elif tool_name == "generate_sapling":
+            name = args.get("name", "")
+            body_color = args.get("body_color", "")
+            leaves_color = args.get("leaves_color", "")
+            save_path = args.get("save_path", "")
+            if not name or not body_color or not leaves_color or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            out_path = generate_sapling(
+                name, body_color, leaves_color, save_path,
+                args.get("filename"),
+            )
+        elif tool_name == "generate_planks":
+            name = args.get("name", "")
+            color = args.get("color", "")
+            save_path = args.get("save_path", "")
+            if not name or not color or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            out_path = colorize_template("planks", color, save_path,
+                                         args.get("filename") or f"planks_{name}.png")
+        elif tool_name == "generate_log":
+            name = args.get("name", "")
+            color = args.get("color", "")
+            save_path = args.get("save_path", "")
+            if not name or not color or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            fn = args.get("filename")
+            main_fn = fn if fn else f"log_{name}.png"
+            top_fn = fn.replace(".png", "_top.png") if fn else f"log_{name}_top.png"
+            main_path, top_path = colorize_template_pair(
+                "log", "log_top", name, color, save_path, main_fn, top_fn)
+            return _rpc_response(req_id, {
+                "content": [{"type": "text", "text": f"Log side: {main_path}\nLog top: {top_path}"}],
+                "out_path": main_path,
+                "top_path": top_path,
+            })
+        elif tool_name == "generate_stripped_log":
+            name = args.get("name", "")
+            color = args.get("color", "")
+            save_path = args.get("save_path", "")
+            if not name or not color or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            fn = args.get("filename")
+            main_fn = fn if fn else f"stripped_log_{name}.png"
+            top_fn = fn.replace(".png", "_top.png") if fn else f"stripped_log_{name}_top.png"
+            main_path, top_path = colorize_template_pair(
+                "stripped_log", "stripped_log_top", name, color, save_path, main_fn, top_fn)
+            return _rpc_response(req_id, {
+                "content": [{"type": "text", "text": f"Stripped Log side: {main_path}\nStripped Log top: {top_path}"}],
+                "out_path": main_path,
+                "top_path": top_path,
+            })
+        elif tool_name == "generate_leaves":
+            name = args.get("name", "")
+            color = args.get("color", "")
+            save_path = args.get("save_path", "")
+            if not name or not color or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            out_path = colorize_template("leaves", color, save_path,
+                                         args.get("filename") or f"leaves_{name}.png")
+        elif tool_name == "generate_door":
+            name = args.get("name", "")
+            color = args.get("color", "")
+            save_path = args.get("save_path", "")
+            if not name or not color or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            fn = args.get("filename")
+            top_fn = fn if fn else f"door_{name}_top.png"
+            bottom_fn = fn.replace(".png", "_bottom.png") if fn else f"door_{name}_bottom.png"
+            top_path, bottom_path = colorize_template_pair(
+                "door_top", "door_bottom", name, color, save_path, top_fn, bottom_fn)
+            return _rpc_response(req_id, {
+                "content": [{"type": "text", "text": f"Door top: {top_path}\nDoor bottom: {bottom_path}"}],
+                "out_path": top_path,
+                "bottom_path": bottom_path,
+            })
+        elif tool_name == "generate_trapdoor":
+            name = args.get("name", "")
+            color = args.get("color", "")
+            save_path = args.get("save_path", "")
+            if not name or not color or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            out_path = colorize_template("trapdoor", color, save_path,
+                                         args.get("filename") or f"trapdoor_{name}.png")
         elif tool_name == "recolor_image":
             input_path = args.get("input_path", "")
             save_path = args.get("save_path", "")

@@ -218,29 +218,130 @@ def remove_solid_background(img: Image.Image, tolerance: int = 40) -> Image.Imag
 
     if len(samples) < 50:
         print("Background removal skipped (edges mostly transparent)")
+    else:
+        # Find the most common color cluster (simple median approach)
+        samples.sort()
+        median = samples[len(samples) // 2]
+        bg_color = median
+
+        # Check if edges are consistent enough
+        distances = [(s[0] - bg_color[0]) ** 2 + (s[1] - bg_color[1]) ** 2 + (s[2] - bg_color[2]) ** 2
+                     for s in samples]
+        distances.sort()
+        p90_dist = int(distances[int(len(distances) * 0.9)] ** 0.5)
+
+        if p90_dist > 80:
+            print(f"Edge sampling failed (p90_dist={p90_dist}), falling back to global histogram")
+            bg_color = _detect_bg_by_histogram(img)
+            if bg_color is None:
+                print("Background removal skipped (no dominant color found)")
+            else:
+                _apply_bg_removal(img, bg_color, tolerance)
+        else:
+            # Use the 90th percentile + buffer as tolerance
+            effective_tol = max(tolerance, p90_dist + 15)
+            print(f"Removing background color ~RGB({bg_color[0]}, {bg_color[1]}, {bg_color[2]}) "
+                  f"[tolerance={effective_tol}, p90={p90_dist}]")
+            _apply_bg_removal(img, bg_color, effective_tol)
+
+    # Post-process: remove small isolated opaque clusters (noise speckles)
+    img = _remove_isolated_pixels(img)
+    return img
+
+
+def _remove_isolated_pixels(img: Image.Image, min_component_ratio: float = 0.002) -> Image.Image:
+    """Remove small disconnected clusters of opaque pixels (background removal noise).
+
+    After color-based background removal, isolated specks that differ enough from the
+    background color survive. This finds connected components of opaque pixels and
+    discards any component smaller than min_component_ratio of total image pixels.
+    """
+    w, h = img.size
+    pixels = img.load()
+    min_size = max(20, int(w * h * min_component_ratio))
+
+    visited: set[tuple[int, int]] = set()
+    components: list[list[tuple[int, int]]] = []
+
+    for y in range(h):
+        for x in range(w):
+            if pixels[x, y][3] == 0 or (x, y) in visited:
+                continue
+            # BFS for 4-connected opaque component
+            comp: list[tuple[int, int]] = [(x, y)]
+            queue: list[tuple[int, int]] = [(x, y)]
+            visited.add((x, y))
+            while queue:
+                cx, cy = queue.pop(0)
+                for nx, ny in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)]:
+                    if 0 <= nx < w and 0 <= ny < h and (nx, ny) not in visited:
+                        visited.add((nx, ny))
+                        if pixels[nx, ny][3] > 0:
+                            queue.append((nx, ny))
+                            comp.append((nx, ny))
+            components.append(comp)
+
+    if len(components) <= 1:
         return img
 
-    # Find the most common color cluster (simple median approach)
-    samples.sort()
-    median = samples[len(samples) // 2]
-    bg_color = median
+    components.sort(key=len, reverse=True)
+    removed = 0
+    for comp in components:
+        if len(comp) < min_size:
+            for cx, cy in comp:
+                r, g, b, _ = pixels[cx, cy]
+                pixels[cx, cy] = (r, g, b, 0)
+                removed += 1
 
-    # Check if edges are consistent enough
-    distances = [(s[0] - bg_color[0]) ** 2 + (s[1] - bg_color[1]) ** 2 + (s[2] - bg_color[2]) ** 2
-                 for s in samples]
-    distances.sort()
-    p90_dist = int(distances[int(len(distances) * 0.9)] ** 0.5)
+    if removed > 0:
+        small_count = sum(1 for c in components if len(c) < min_size)
+        print(f"Removed {removed} isolated noise pixels ({small_count} small components, "
+              f"kept {len(components) - small_count} components >= {min_size}px)")
 
-    if p90_dist > 80:
-        print(f"Background removal skipped (edges too varied, p90_dist={p90_dist})")
-        return img
+    return img
 
-    # Use the 90th percentile + buffer as tolerance
-    effective_tol = max(tolerance, p90_dist + 15)
-    print(f"Removing background color ~RGB({bg_color[0]}, {bg_color[1]}, {bg_color[2]}) "
-          f"[tolerance={effective_tol}, p90={p90_dist}]")
 
-    tol_sq = effective_tol * effective_tol
+def _detect_bg_by_histogram(img: Image.Image) -> tuple[int, int, int] | None:
+    """Find the dominant color in the image via RGB histogram (32-unit buckets).
+
+    Returns the average RGB of the largest bucket if it covers >20% of opaque pixels,
+    otherwise None (no clear background).
+    """
+    w, h = img.size
+    pixels = img.load()
+    bins: dict[tuple[int, int, int], list[tuple[int, int, int]]] = {}
+    bucket_size = 32
+    total_opaque = 0
+    for y in range(0, h, 2):  # sample every other row/col for speed
+        for x in range(0, w, 2):
+            r, g, b, a = pixels[x, y]
+            if a > 0:
+                key = (r // bucket_size, g // bucket_size, b // bucket_size)
+                bins.setdefault(key, []).append((r, g, b))
+                total_opaque += 1
+
+    if not bins:
+        return None
+
+    best_key, best_pixels = max(bins.items(), key=lambda kv: len(kv[1]))
+    if len(best_pixels) / max(total_opaque, 1) < 0.20:
+        return None
+
+    n = len(best_pixels)
+    avg_r = sum(p[0] for p in best_pixels) // n
+    avg_g = sum(p[1] for p in best_pixels) // n
+    avg_b = sum(p[2] for p in best_pixels) // n
+    print(f"Histogram bg: ~RGB({avg_r}, {avg_g}, {avg_b}) "
+          f"[{len(best_pixels)}/{total_opaque} sampled, {len(best_pixels) * 100 // max(total_opaque, 1)}%]")
+    return (avg_r, avg_g, avg_b)
+
+
+def _apply_bg_removal(img: Image.Image, bg_color: tuple[int, int, int],
+                      tolerance: int = 40) -> None:
+    """Make pixels near bg_color transparent. Modifies img in place."""
+    w, h = img.size
+    pixels = img.load()
+    tol_sq = tolerance * tolerance
     removed = 0
     for y in range(h):
         for x in range(w):
@@ -251,10 +352,8 @@ def remove_solid_background(img: Image.Image, tolerance: int = 40) -> Image.Imag
             if dist <= tol_sq:
                 pixels[x, y] = (r, g, b, 0)
                 removed += 1
-
     total = w * h
     print(f"Made {removed}/{total} pixels transparent ({removed * 100 // total}%)")
-    return img
 
 
 def _ensure_png_ext(filename: str) -> str:
@@ -911,6 +1010,186 @@ def generate_ore_texture(name: str, color: str, save_path: str,
     out_name = _ensure_png_ext(filename) if filename else f"{prefix}{name}.png"
 
     return composite_colorized(base_path, overlays, save_path, out_name)
+
+
+# ── Image color analysis ──
+
+def analyze_image_colors(input_path: str, max_colors: int = 6) -> list[dict]:
+    """Extract dominant colors from an image.
+
+    Args:
+        input_path: Path to the image to analyze.
+        max_colors: Maximum number of dominant colors to extract (default 6).
+
+    Returns:
+        List of dicts sorted by coverage (descending), each with:
+        hex (str), rgb (tuple), coverage (float 0-1), pixel_count (int).
+    """
+    img = Image.open(input_path).convert("RGBA")
+
+    # Discard fully transparent pixels
+    opaque_pixels = []
+    px = img.load()
+    w, h = img.size
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if a > 0:
+                opaque_pixels.append((r, g, b))
+
+    if not opaque_pixels:
+        raise ValueError("Image has no opaque pixels to analyze")
+
+    total = len(opaque_pixels)
+
+    # Quantize: reduce to a color cube / limited palette
+    # Use a simple frequency-based approach with RGB bucketing
+    bucket_size = 32
+    bins: dict[tuple[int, int, int], list[tuple[int, int, int]]] = {}
+    for r, g, b in opaque_pixels:
+        key = (r // bucket_size, g // bucket_size, b // bucket_size)
+        bins.setdefault(key, []).append((r, g, b))
+
+    # Calculate average color per bucket
+    clusters = []
+    for key, values in bins.items():
+        n = len(values)
+        avg_r = sum(v[0] for v in values) // n
+        avg_g = sum(v[1] for v in values) // n
+        avg_b = sum(v[2] for v in values) // n
+        clusters.append((avg_r, avg_g, avg_b, n))
+
+    # Sort by frequency, keep top N
+    clusters.sort(key=lambda c: c[3], reverse=True)
+    clusters = clusters[:max_colors]
+
+    results = []
+    for r, g, b, n in clusters:
+        results.append({
+            "hex": f"#{r:02X}{g:02X}{b:02X}",
+            "rgb": (r, g, b),
+            "coverage": n / total,
+            "pixel_count": n,
+        })
+
+    return results
+
+
+def suggest_ore_colors(analysis: list[dict], top_n: int = 3) -> list[str]:
+    """Pick the most saturated/vibrant colors from analysis results for ore generation.
+
+    Sorts dominant colors by saturation and returns the top N hex values.
+    """
+    def _saturation(entry):
+        r, g, b = entry["rgb"]
+        mx = max(r, g, b)
+        mn = min(r, g, b)
+        return (mx - mn) / max(mx, 1) if mx > 0 else 0
+
+    sorted_by_sat = sorted(analysis, key=_saturation, reverse=True)
+    return [e["hex"] for e in sorted_by_sat[:top_n]]
+
+
+# ── Wood texture tools ──
+
+WOOD_TEMPLATES = {
+    "planks": "planks.png",
+    "leaves": "leaves.png",
+    "trapdoor": "trapdoor.png",
+    "log": "log.png",
+    "log_top": "log_top.png",
+    "stripped_log": "stripped_log.png",
+    "stripped_log_top": "stripped_log_top.png",
+    "door_bottom": "door_bottom.png",
+    "door_top": "door_top.png",
+    "sapling_body": "sapling_body.png",
+    "sapling_leaves": "sapling_leaves.png",
+}
+TEMPLATES_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _template_path(filename: str) -> str:
+    return os.path.join(TEMPLATES_DIR, filename)
+
+
+def colorize_template(template: str, color: str, save_path: str,
+                      filename: str | None = None) -> str:
+    """Colorize a grayscale wood template with the given color.
+
+    Args:
+        template: Template key from WOOD_TEMPLATES (e.g. 'planks', 'leaves').
+        color: Hex color for the wood (e.g. '#8B4513' for oak brown).
+        save_path: Directory to save the output.
+        filename: Custom output filename. Defaults to <template>_<color>.png.
+
+    Returns the absolute path to the saved file.
+    """
+    if template not in WOOD_TEMPLATES:
+        raise ValueError(f"Unknown template '{template}'. Available: {list(WOOD_TEMPLATES.keys())}")
+    input_path = _template_path(WOOD_TEMPLATES[template])
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"Template not found: {input_path}")
+    return colorize_grayscale(input_path, save_path, color, filename)
+
+
+def colorize_template_pair(main_template: str, top_template: str,
+                           name: str, color: str, save_path: str,
+                           filename_main: str | None = None,
+                           filename_top: str | None = None) -> tuple[str, str]:
+    """Colorize a pair of templates (e.g. log + log_top) with the same color.
+
+    Returns (main_path, top_path) absolute paths.
+    """
+    main_path = colorize_template(main_template, color, save_path, filename_main)
+    top_path = colorize_template(top_template, color, save_path, filename_top)
+    return main_path, top_path
+
+
+def generate_sapling(name: str, body_color: str, leaves_color: str,
+                     save_path: str, filename: str | None = None) -> str:
+    """Generate a sapling texture by compositing colorized body + leaves.
+
+    Args:
+        name: Wood name for default filename (e.g. 'oak').
+        body_color: Hex color for the sapling body/stem.
+        leaves_color: Hex color for the leaves.
+        save_path: Directory to save the output.
+        filename: Custom output filename. Defaults to sapling_<name>.png.
+
+    Returns the absolute path to the saved file.
+    """
+    body = Image.open(_template_path("sapling_body.png")).convert("RGBA")
+    leaves = Image.open(_template_path("sapling_leaves.png")).convert("RGBA")
+
+    def _colorize_pixels(img: Image.Image, color_hex: str) -> Image.Image:
+        tr = int(color_hex[1:3], 16)
+        tg = int(color_hex[3:5], 16)
+        tb = int(color_hex[5:7], 16)
+        px = img.load()
+        for y in range(img.height):
+            for x in range(img.width):
+                r, g, b, a = px[x, y]
+                if a == 0:
+                    continue
+                lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+                nr = min(255, int(tr * lum))
+                ng = min(255, int(tg * lum))
+                nb = min(255, int(tb * lum))
+                px[x, y] = (nr, ng, nb, a)
+        return img
+
+    body = _colorize_pixels(body, body_color)
+    leaves = _colorize_pixels(leaves, leaves_color)
+
+    # Composite leaves on top of body
+    body.paste(leaves, (0, 0), leaves)
+
+    out_dir = save_path
+    os.makedirs(out_dir, exist_ok=True)
+    out_name = _ensure_png_ext(filename) if filename else f"sapling_{name}.png"
+    out_path = os.path.join(out_dir, out_name)
+    body.save(out_path, "PNG")
+    return os.path.abspath(out_path)
 
 
 def main():

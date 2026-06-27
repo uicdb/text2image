@@ -1,2 +1,4 @@
 api_token.txt
 /tool/
+/test/
+__pycache__/
