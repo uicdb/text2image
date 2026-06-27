@@ -877,6 +877,36 @@ def rotate_pixel_art(input_path: str, save_path: str,
     return os.path.abspath(out_path)
 
 
+def generate_ore_texture(name: str, color: str, save_path: str,
+                         filename: str | None = None) -> str:
+    """Generate an ore texture using standard stone base + ore overlay.
+
+    Automatically uses ore_background.png as the base and ore_overlay.png
+    as the grayscale overlay, colorizing it with the given color.
+
+    Args:
+        name: Ore name (e.g. 'diamond', 'iron') for default filename.
+        color: Hex color for the ore (e.g. '#00FFFF' for diamond).
+        save_path: Directory to save the output.
+        filename: Custom output filename. Defaults to ore_<name>.png.
+
+    Returns the absolute path to the saved file.
+    """
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    base_path = os.path.join(project_dir, "ore_background.png")
+    overlay_path = os.path.join(project_dir, "ore_overlay.png")
+
+    if not os.path.exists(base_path):
+        raise FileNotFoundError(f"Base texture not found: {base_path}")
+    if not os.path.exists(overlay_path):
+        raise FileNotFoundError(f"Overlay texture not found: {overlay_path}")
+
+    overlays = [{"path": overlay_path, "color": color}]
+    out_name = _ensure_png_ext(filename) if filename else f"ore_{name}.png"
+
+    return composite_colorized(base_path, overlays, save_path, out_name)
+
+
 def main():
     token, model, image_size = load_config()
 

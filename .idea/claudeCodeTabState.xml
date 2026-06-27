@@ -9,9 +9,9 @@
               <option name="provider" value="claude" />
               <option name="sessionId" value="5eec4a4c-1f91-458f-8230-0714f1e0bf4c" />
               <option name="cwd" value="$PROJECT_DIR$" />
-              <option name="model" value="claude-sonnet-4-6[1m]" />
+              <option name="model" value="claude-haiku-4-5" />
               <option name="permissionMode" value="bypassPermissions" />
-              <option name="reasoningEffort" value="high" />
+              <option name="reasoningEffort" value="max" />
             </TabSessionState>
           </value>
         </entry>

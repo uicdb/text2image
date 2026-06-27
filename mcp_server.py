@@ -1,6 +1,6 @@
 """MCP server wrapping the Minecraft pixel art generator.
 
-Tools: 13 MCP tools — image generation, processing, file & OCR utilities
+Tools: 15 MCP tools — image generation, processing, file & OCR utilities
 """
 
 import json
@@ -21,6 +21,7 @@ from generate_mc_pixelart import (  # noqa: E402
     pixelate_image,
     composite_colorized,
     composite_layers,
+    generate_ore_texture,
     upload_file,
     list_files,
     image_ocr,
@@ -314,6 +315,32 @@ TOOLS = [
         },
     },
     {
+        "name": "generate_ore_texture",
+        "description": "Generate a Minecraft ore texture by compositing the standard stone base (ore_background.png) with the ore overlay (ore_overlay.png) colorized to the given color. A simplified ore generation — just pass a name and color, no need to specify file paths.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Ore name (e.g. 'diamond', 'iron', 'lapis'). Used in default filename.",
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Hex color for the ore (e.g. '#00FFFF' for diamond, '#FFD700' for gold).",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Directory path to save the output image",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename, defaults to ore_<name>.png",
+                },
+            },
+            "required": ["name", "color", "save_path"],
+        },
+    },
+    {
         "name": "recolor_image",
         "description": "Recolor an image by replacing a specific color or applying a hue overlay. Useful for creating monster/item variants (e.g. turn a red sword blue, or recolor a green zombie to purple).",
         "inputSchema": {
@@ -535,6 +562,16 @@ def handle_tools_call(req_id, params):
             out_path = composite_layers(
                 layers, save_path,
                 tuple(size) if size else None,
+                args.get("filename"),
+            )
+        elif tool_name == "generate_ore_texture":
+            name = args.get("name", "")
+            color = args.get("color", "")
+            save_path = args.get("save_path", "")
+            if not name or not color or not save_path:
+                return _rpc_error(req_id, -32602, "Missing required parameters")
+            out_path = generate_ore_texture(
+                name, color, save_path,
                 args.get("filename"),
             )
         elif tool_name == "recolor_image":

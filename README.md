@@ -2,7 +2,7 @@
 
 调用 AI 生成 Minecraft 风格像素贴图（物品、方块、Buff 图标），智能去背景，邻近缩放。同时提供图像处理工具集（改色、着色、像素化、图生图、OCR）。
 
-支持 **CLI** 和 **MCP 服务**两种使用方式，共 14 个 MCP 工具。
+支持 **CLI** 和 **MCP 服务**两种使用方式，共 15 个 MCP 工具。
 
 ## 环境要求
 
@@ -101,6 +101,7 @@ python generate_mc_pixelart.py --model "Tongyi-MAI/Z-Image-Turbo" "crystal wand"
 | `pixelate_image` | 指定图片 → 去背景 + 邻近缩放到 MC 像素风 | input_path, size(16-1024) |
 | `composite_colorized` | 底图 + 灰度叠加层着色（简单矿石） | base_path, overlays[{path, color}] |
 | `composite_layers` | 多层叠加合成，每层独立着色和混合模式 | layers[{path, color?, blend_mode?, keep_rgb?}] |
+| `generate_ore_texture` | 简化矿石生成：自动使用 ore_background/overlay，仅需颜色 | name, color |
 | `recolor_image` | 颜色替换/色调变换 | color, from_color, tolerance(0-255), smooth |
 | `colorize_grayscale` | 灰度图着色 | color, brightness(0.5-1.5) |
 | `rotate_pixel_art` | 旋转 + NEAREST 缩回原尺寸 | angle（正数逆时针，默认 45） |
